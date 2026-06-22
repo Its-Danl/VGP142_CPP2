@@ -17,7 +17,6 @@ namespace CursedWilds
         protected Health health;
         protected Animator animator;
         protected float nextAttack;
-        // Terrain slopes must not make nearby, open-ground enemies permanently inert.
         protected bool PlayerVisible => player != null && Vector3.Distance(transform.position, player.position) <= detectionRadius;
 
         protected virtual void Awake()
@@ -29,7 +28,7 @@ namespace CursedWilds
         {
             if (player == null) player = GameObject.FindGameObjectWithTag("Player")?.transform;
             if (healthBar != null && Camera.main != null) healthBar.forward = Camera.main.transform.forward;
-            if (animator != null) animator.SetFloat("Speed", agent != null && agent.enabled ? agent.velocity.magnitude : 0f);
+            if (animator != null && agent != null && agent.enabled) animator.SetFloat("Speed", agent.velocity.magnitude);
         }
         protected void DamagePlayer() { if (player == null || Time.time < nextAttack) return; nextAttack = Time.time + attackCooldown; if (animator != null) animator.SetTrigger("Attack"); player.GetComponent<PlayerStatus>()?.ReceiveDamage(attackDamage, gameObject); AudioManager.PlaySfx(.2f, 180f); }
         private void OnDied(Health _, GameObject __) { if (agent != null && agent.enabled) agent.isStopped = true; if (animator != null) animator.SetBool("Dead", true); VfxFactory.SpawnEnemyDeath(transform.position + Vector3.up); AudioManager.PlaySfx(.45f, 90f); Destroy(gameObject, 1.4f); }
@@ -63,37 +62,149 @@ namespace CursedWilds
 
     public sealed partial class ChargerEnemy : EnemyController
     {
-        [SerializeField] private float chargeSpeed = 15f;
-        [SerializeField] private float windup = .65f;
-        [SerializeField] private float recovery = 1.2f;
-        private float chargeAt = -1f, recoveryUntil;
+        [Header("Flying Charger")]
+        [SerializeField] private float hoverHeight = 6f;
+        [SerializeField] private float dipSpeed = 22f;
+        [SerializeField] private float riseSpeed = 8f;
+        [SerializeField] private float attackDamageDip = 18f;
+        [SerializeField] private float windup = 1f;
+        [SerializeField] private float recovery = 1.5f;
+        [SerializeField] private float circleSpeed = 1.5f;
+        [SerializeField] private float circleRadius = 8f;
+
+        private enum State { Circling, Dipping, Rising }
+        private State state = State.Circling;
+        private float stateTimer;
+        private float circleAngle;
+        private Vector3 hoverTarget;
+        private float baseY;
+
         protected override void Awake()
         {
             base.Awake();
             if (agent != null) agent.enabled = false;
         }
+
         protected override void Update()
         {
-            base.Update(); if (health.IsDead || player == null || Time.time < recoveryUntil) return;
-            float distance = Vector3.Distance(transform.position, player.position); if (!PlayerVisible) return;
-            if (chargeAt < 0f && distance > attackRadius && distance < detectionRadius) { chargeAt = Time.time + windup; return; }
-            if (chargeAt > 0f && Time.time >= chargeAt)
+            base.Update();
+            if (health.IsDead || player == null) return;
+
+            // Maintain altitude always
+            float groundY = GetGroundHeight();
+            baseY = groundY + hoverHeight;
+
+            switch (state)
             {
-                Vector3 direction = (player.position - transform.position); direction.y = 0f; transform.position += direction.normalized * chargeSpeed * Time.deltaTime; transform.forward = direction.normalized;
-                if (Vector3.Distance(transform.position, player.position) <= attackRadius) { DamagePlayer(); chargeAt = -1f; recoveryUntil = Time.time + recovery; }
-                else if (Time.time > chargeAt + 1.2f) { chargeAt = -1f; recoveryUntil = Time.time + recovery; }
+                case State.Circling:
+                    UpdateCircling();
+                    break;
+                case State.Dipping:
+                    UpdateDipping();
+                    break;
+                case State.Rising:
+                    UpdateRising();
+                    break;
             }
+
+            // Always face the player horizontally
+            if (player != null)
+            {
+                Vector3 flat = player.position - transform.position;
+                flat.y = 0f;
+                if (flat.sqrMagnitude > .01f)
+                    transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(flat), 6f * Time.deltaTime);
+            }
+        }
+
+        private void UpdateCircling()
+        {
+            if (!PlayerVisible) return;
+
+            circleAngle += circleSpeed * Time.deltaTime;
+            Vector3 offset = new Vector3(Mathf.Cos(circleAngle) * circleRadius, 0f, Mathf.Sin(circleAngle) * circleRadius);
+            Vector3 targetPos = player.position + offset;
+            targetPos.y = baseY;
+
+            transform.position = Vector3.Lerp(transform.position, targetPos, 4f * Time.deltaTime);
+
+            // Decide to dip
+            float dist = Vector3.Distance(transform.position, player.position);
+            if (dist < detectionRadius * 0.7f && Time.time > stateTimer)
+            {
+                state = State.Dipping;
+                stateTimer = Time.time + windup;
+            }
+        }
+
+        private void UpdateDipping()
+        {
+            // Hover down toward player
+            Vector3 dipTarget = player.position + Vector3.up * 1.2f;
+            transform.position = Vector3.MoveTowards(transform.position, dipTarget, dipSpeed * Time.deltaTime);
+
+            float dist = Vector3.Distance(transform.position, player.position);
+
+            // Hit the player when close enough
+            if (dist < attackRadius)
+            {
+                if (Time.time >= stateTimer)
+                {
+                    player.GetComponent<PlayerStatus>()?.ReceiveDamage(attackDamageDip, gameObject);
+                    nextAttack = Time.time + attackCooldown;
+                    if (animator != null) animator.SetTrigger("Attack");
+                    AudioManager.PlaySfx(.2f, 180f);
+                    VfxFactory.Spawn(transform.position, Color.red, 15);
+                }
+                state = State.Rising;
+                stateTimer = Time.time + recovery;
+                return;
+            }
+
+            // Timeout — rise back up
+            if (Time.time > stateTimer + 0.5f)
+            {
+                state = State.Rising;
+                stateTimer = Time.time + recovery;
+            }
+        }
+
+        private void UpdateRising()
+        {
+            // Fly back up to hover height
+            Vector3 riseTarget = transform.position;
+            riseTarget.y = baseY;
+            transform.position = Vector3.MoveTowards(transform.position, riseTarget, riseSpeed * Time.deltaTime);
+
+            if (transform.position.y >= baseY - 0.5f || Time.time > stateTimer)
+            {
+                state = State.Circling;
+                stateTimer = Time.time + recovery * 0.5f;
+            }
+        }
+
+        private float GetGroundHeight()
+        {
+            if (Physics.Raycast(transform.position + Vector3.up * 50f, Vector3.down, out RaycastHit hit, 100f, LayerMask.GetMask("Default")))
+                return hit.point.y;
+            return 0f;
         }
     }
 
     public sealed partial class EnemyProjectile : MonoBehaviour
     {
-        private Vector3 direction; private float speed = 18f; private float damage = 14f;
+        private Vector3 direction;
+        private float speed = 18f;
+        private float damage = 14f;
+        private float maxLifetime = 4f;
+        private float spawnTime;
+
         public void Launch(Transform player)
         {
             direction = ((player.position + Vector3.up) - transform.position).normalized;
             transform.forward = direction;
-            Destroy(gameObject, 4f);
+            spawnTime = Time.time;
+            Destroy(gameObject, maxLifetime);
         }
         private void Update()
         {
@@ -101,8 +212,16 @@ namespace CursedWilds
         }
         private void OnTriggerEnter(Collider other)
         {
-            PlayerStatus status = other.GetComponentInParent<PlayerStatus>();
-            if (status != null) { status.ReceiveDamage(damage, gameObject); VfxFactory.Spawn(transform.position, Color.red, 15); Destroy(gameObject); }
+            if (other.CompareTag("Player") || other.transform.root.CompareTag("Player"))
+            {
+                PlayerStatus status = other.GetComponentInParent<PlayerStatus>();
+                if (status != null)
+                {
+                    status.ReceiveDamage(damage, gameObject);
+                    VfxFactory.Spawn(transform.position, Color.red, 15);
+                    Destroy(gameObject);
+                }
+            }
         }
     }
 
@@ -110,10 +229,30 @@ namespace CursedWilds
     {
         [SerializeField] private Transform fill;
         [SerializeField] private Health target;
+        private float maxWidth = 1f;
+
         public void Configure(Health health, Transform fillTransform) { target = health; fill = fillTransform; }
-        private void Awake() { if (target == null) target = GetComponentInParent<Health>(); if (target != null) target.Changed += Changed; }
+        private void Awake()
+        {
+            if (fill != null) maxWidth = fill.localScale.x;
+            if (target == null) target = GetComponentInParent<Health>();
+            if (target != null)
+            {
+                target.Changed += Changed;
+                // Force initial update
+                Changed(target.CurrentHealth, target.MaximumHealth);
+            }
+        }
         private void OnDestroy() { if (target != null) target.Changed -= Changed; }
-        private void Changed(float current, float max) { if (fill != null) fill.localScale = new Vector3(Mathf.Clamp01(current / max), 1f, 1f); }
+        private void Changed(float current, float max)
+        {
+            if (fill != null)
+            {
+                float ratio = Mathf.Clamp01(current / max);
+                fill.localScale = new Vector3(maxWidth * ratio, fill.localScale.y, fill.localScale.z);
+                fill.localPosition = new Vector3(-(maxWidth * (1f - ratio)) * 0.5f, fill.localPosition.y, fill.localPosition.z);
+            }
+        }
         private void LateUpdate() { if (Camera.main != null) transform.forward = Camera.main.transform.forward; }
     }
 

@@ -36,6 +36,7 @@ namespace CursedWilds
         public bool WasCollected(CollectibleKind kind) => (data.collectedMask & (1 << (int)kind)) != 0;
         public void MarkCollected(CollectibleKind kind) { data.collectedMask |= 1 << (int)kind; Save(); }
         public void SetMasterVolume(float value) { data.masterVolume = Mathf.Clamp01(value); Save(); }
+        public void ResetProgress() { data.collectedMask = 0; Save(); }
 
         private void Load()
         {
@@ -64,12 +65,18 @@ namespace CursedWilds
     public sealed partial class ObjectiveTracker : MonoBehaviour
     {
         [SerializeField] private Text label;
+        [SerializeField] private bool loadFromSave = true;
         private readonly HashSet<CollectibleKind> required = new HashSet<CollectibleKind>();
         public bool HasRequirements => required.Contains(CollectibleKind.Heal) && required.Contains(CollectibleKind.Speed) && required.Contains(CollectibleKind.Shield);
+        public int RequiredCount => required.Count;
+
         private void Start()
         {
-            foreach (CollectibleKind kind in new[] { CollectibleKind.Heal, CollectibleKind.Speed, CollectibleKind.Shield })
-                if (SaveSystem.Instance != null && SaveSystem.Instance.WasCollected(kind)) required.Add(kind);
+            if (loadFromSave)
+            {
+                foreach (CollectibleKind kind in new[] { CollectibleKind.Heal, CollectibleKind.Speed, CollectibleKind.Shield })
+                    if (SaveSystem.Instance != null && SaveSystem.Instance.WasCollected(kind)) required.Add(kind);
+            }
             Refresh();
         }
         public void Collected(CollectibleKind kind)
@@ -77,7 +84,11 @@ namespace CursedWilds
             if (kind != CollectibleKind.HeartwoodRelic) required.Add(kind);
             Refresh();
         }
-        private void Refresh() { if (label != null) label.text = HasRequirements ? "Heartwood Relic unlocked — find it!" : "Cursed charms: " + required.Count + " / 3"; }
+        private void Refresh()
+        {
+            if (label != null)
+                label.text = HasRequirements ? "Heartwood Relic unlocked — find it!" : "Cursed charms: " + required.Count + " / 3";
+        }
     }
 
     [RequireComponent(typeof(Collider))]
@@ -97,10 +108,7 @@ namespace CursedWilds
             GameObject player = GameObject.FindGameObjectWithTag("Player");
             if (player != null && (player.transform.position - transform.position).sqrMagnitude <= pickupRadius * pickupRadius) TryCollect(player);
         }
-        private void OnTriggerEnter(Collider other)
-        {
-            TryCollect(other.gameObject);
-        }
+        private void OnTriggerEnter(Collider other) => TryCollect(other.gameObject);
         private void TryCollect(GameObject candidate)
         {
             if (collected) return;
@@ -121,18 +129,43 @@ namespace CursedWilds
     {
         [SerializeField] private float damagePerSecond = 12f;
         [SerializeField] private bool slow;
-        private void Awake() => GetComponent<Collider>().isTrigger = true;
+        [SerializeField] private Vector3 boxSize = new Vector3(10f, 4f, 10f);
+        private Collider volumeCollider;
+        private readonly HashSet<PlayerStatus> activePlayers = new HashSet<PlayerStatus>();
+
+        private void Awake()
+        {
+            volumeCollider = GetComponent<Collider>();
+            if (volumeCollider != null) volumeCollider.isTrigger = true;
+        }
+
+        private void OnTriggerEnter(Collider other)
+        {
+            PlayerStatus status = other.GetComponentInParent<PlayerStatus>();
+            if (status != null) activePlayers.Add(status);
+        }
+
+        private void OnTriggerExit(Collider other)
+        {
+            PlayerStatus status = other.GetComponentInParent<PlayerStatus>();
+            if (status != null) activePlayers.Remove(status);
+        }
+
         private void Update()
         {
-            GameObject player = GameObject.FindGameObjectWithTag("Player"); if (player == null) return;
-            Vector3 delta = player.transform.position - transform.position; delta.y = 0f;
-            float radius = Mathf.Max(transform.lossyScale.x, transform.lossyScale.z) * .5f;
-            if (delta.sqrMagnitude <= radius * radius) ApplyTo(player);
+            if (activePlayers.Count == 0) return;
+            float damageThisFrame = damagePerSecond * Time.deltaTime;
+            foreach (PlayerStatus status in activePlayers)
+            {
+                if (status == null) continue;
+                status.ReceiveDamage(damageThisFrame, gameObject);
+                if (slow) status.Slow(.25f);
+            }
         }
-        private void ApplyTo(GameObject candidate)
+
+        private void OnDestroy()
         {
-            PlayerStatus status = candidate.GetComponentInParent<PlayerStatus>(); if (status == null) return;
-            status.ReceiveDamage(damagePerSecond * Time.deltaTime, gameObject); if (slow) status.Slow(.25f);
+            activePlayers.Clear();
         }
     }
 
@@ -225,7 +258,7 @@ namespace CursedWilds
             for (int i = 0; i < samples; i++)
             {
                 float t = i / (float)rate; float bar = Mathf.Floor(t / 3f); float low = root * chord[(int)bar % chord.Length]; float drone = Mathf.Sin(2f * Mathf.PI * low * t) * .11f + Mathf.Sin(2f * Mathf.PI * low * .5f * t) * .08f;
-                float pulse = Mathf.Pow(Mathf.Max(0f, Mathf.Sin(2f * Mathf.PI * (t % .75f) / .75f)), 8f) * Mathf.Sin(2f * Mathf.PI * low * 2f * t) * .045f;
+                float pulse = Mathf.Pow(Mathf.Max(0f, Mathf.Sin(2f * Mathf.PI * (t % .75f) / .75f)), 8f) * Mathf.Sin(2f * Mathf.PI * low * 2f * now) * .045f;
                 data[i] = (drone + pulse) * (.72f + Mathf.Sin(t * .14f) * .08f);
             }
             clip.SetData(data, 0); return clip;
@@ -243,5 +276,9 @@ namespace CursedWilds
             var go = new GameObject("EnemyDeathParticles"); go.transform.position = position; var ps = go.AddComponent<ParticleSystem>(); var main = ps.main; main.startColor = new Color(.8f,.08f,1f); main.startLifetime = 1.1f; main.startSpeed = 4.2f; main.maxParticles = 48; var emission = ps.emission; emission.SetBursts(new[] { new ParticleSystem.Burst(0f, 48) }); var shape = ps.shape; shape.shapeType = ParticleSystemShapeType.Hemisphere; shape.radius = .45f; ps.Play(); UnityEngine.Object.Destroy(go, 1.7f);
         }
         public static void Spawn(Vector3 position, Color color, int count) => SpawnEnemyDeath(position);
+        public static void SpawnPickupColor(Vector3 position, Color color, int count)
+        {
+            var go = new GameObject("PickupParticles"); go.transform.position = position; var ps = go.AddComponent<ParticleSystem>(); var main = ps.main; main.startColor = color; main.startLifetime = .8f; main.startSpeed = 2.5f; main.maxParticles = count; var emission = ps.emission; emission.SetBursts(new[] { new ParticleSystem.Burst(0f, (short)count) }); var shape = ps.shape; shape.shapeType = ParticleSystemShapeType.Sphere; shape.radius = .25f; ps.Play(); UnityEngine.Object.Destroy(go, 1.4f);
+        }
     }
 }

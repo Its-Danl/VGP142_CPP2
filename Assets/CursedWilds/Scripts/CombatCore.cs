@@ -23,6 +23,7 @@ namespace CursedWilds
         public event Action<Health, GameObject> Died;
 
         private void Awake() => currentHealth = Mathf.Clamp(currentHealth, 0f, maximumHealth);
+        private void Start() => Changed?.Invoke(currentHealth, maximumHealth);
         public void Configure(float maximum) { maximumHealth = Mathf.Max(1f, maximum); currentHealth = maximumHealth; IsDead = false; Changed?.Invoke(currentHealth, maximumHealth); }
         public void ApplyDamage(float amount, GameObject source = null)
         {
@@ -179,7 +180,8 @@ namespace CursedWilds
             if (animator != null && HasParameter(animator, "Attack", AnimatorControllerParameterType.Trigger)) animator.SetTrigger("Attack");
             visualAnimation?.PlayAttack();
             StartCoroutine(ApplyHitAtImpact());
-            AudioManager.PlaySfx(.18f, 150f);
+            AudioManager.PlaySfx(.22f, 220f);
+            AudioManager.PlaySfx(.12f, 110f);
         }
 
         private IEnumerator ApplyHitAtImpact()
@@ -243,6 +245,7 @@ namespace CursedWilds
         private void Start()
         {
             if (target == null) target = GameObject.FindGameObjectWithTag("Player")?.GetComponent<Health>();
+            if (fill == null) fill = GetComponentInChildren<Image>();
             if (target != null) Bind(target);
         }
         public void Bind(Health health)
@@ -256,6 +259,10 @@ namespace CursedWilds
         }
         private void OnDestroy() { if (target != null) target.Changed -= OnChanged; }
         private void OnChanged(float current, float maximum) => desired = Mathf.Clamp01(current / maximum);
-        private void Update() { if (fill != null) fill.fillAmount = Mathf.Lerp(fill.fillAmount, desired, Time.deltaTime * smoothing); }
+        private void Update()
+        {
+            if (fill == null) return;
+            fill.fillAmount = Mathf.Lerp(fill.fillAmount, desired, Time.deltaTime * smoothing);
+        }
     }
 }
