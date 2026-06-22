@@ -1,0 +1,247 @@
+using System.Collections.Generic;
+using CursedWilds;
+using Unity.AI.Navigation;
+using UnityEditor;
+using UnityEditor.Events;
+using UnityEditor.SceneManagement;
+using UnityEngine;
+using UnityEngine.AI;
+using UnityEngine.EventSystems;
+using UnityEngine.InputSystem.UI;
+using UnityEngine.SceneManagement;
+using UnityEngine.UI;
+
+namespace CursedWilds.Editor
+{
+    public static class CursedWildsBuilder
+    {
+        private const string Root = "Assets/CursedWilds";
+        private static Material toxic, fire, bramble, relic, enemyA, enemyB, enemyC;
+
+        [MenuItem("Cursed Wilds/Rebuild Complete Game %&g")]
+        public static void BuildGame()
+        {
+            EditorSettings.serializationMode = SerializationMode.ForceText;
+            EnsureFolders(); CleanLegacyPrefabs(); CreateMaterials();
+            GameObject projectile = CreateProjectilePrefab();
+            GameObject melee = CreateEnemyPrefab("MeleeEnemy", enemyA, 70f, typeof(MeleeEnemy), projectile);
+            GameObject turret = CreateEnemyPrefab("TurretEnemy", enemyB, 85f, typeof(TurretEnemy), projectile);
+            GameObject charger = CreateEnemyPrefab("ChargerEnemy", enemyC, 110f, typeof(ChargerEnemy), projectile);
+            BuildMainMenu(); BuildGameplay(melee, turret, charger); SetBuildScenes();
+            AssetDatabase.SaveAssets(); AssetDatabase.Refresh();
+            Debug.Log("Cursed Wilds scenes and prefabs built successfully.");
+        }
+
+        [MenuItem("Cursed Wilds/Build Windows %&b")]
+        public static void BuildWindows()
+        {
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+            string output = "BuildFinal/CursedWilds.exe";
+            var result = BuildPipeline.BuildPlayer(new BuildPlayerOptions
+            {
+                scenes = new[] { Root + "/Scenes/MainMenu.unity", Root + "/Scenes/CursedWilds.unity" },
+                locationPathName = output,
+                target = BuildTarget.StandaloneWindows64,
+                options = BuildOptions.CleanBuildCache | BuildOptions.CompressWithLz4HC
+            });
+            if (result.summary.result != UnityEditor.Build.Reporting.BuildResult.Succeeded)
+                throw new System.Exception("Windows build failed: " + result.summary.result);
+            Debug.Log("Cursed Wilds Windows build completed: " + output);
+        }
+
+        public static void BuildGameplaySmoke()
+        {
+            var result = BuildPipeline.BuildPlayer(new BuildPlayerOptions
+            {
+                scenes = new[] { Root + "/Scenes/CursedWilds.unity" },
+                locationPathName = "BuildSmoke/CursedWilds.exe",
+                target = BuildTarget.StandaloneWindows64,
+                options = BuildOptions.CleanBuildCache | BuildOptions.CompressWithLz4HC
+            });
+            if (result.summary.result != UnityEditor.Build.Reporting.BuildResult.Succeeded)
+                throw new System.Exception("Gameplay smoke build failed: " + result.summary.result);
+            Debug.Log("Gameplay smoke build completed.");
+        }
+
+        private static void EnsureFolders()
+        {
+            foreach (string folder in new[] { Root, Root + "/Scenes", Root + "/Prefabs", Root + "/Materials", Root + "/Generated" })
+                if (!AssetDatabase.IsValidFolder(folder)) AssetDatabase.CreateFolder(folder[..folder.LastIndexOf('/')], folder[(folder.LastIndexOf('/') + 1)..]);
+        }
+        private static void CleanLegacyPrefabs()
+        {
+            const string legacyFireball = "Assets/Prefabs/Fireball.prefab";
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(legacyFireball) == null) return;
+            GameObject root = PrefabUtility.LoadPrefabContents(legacyFireball);
+            try
+            {
+                RemoveMissingScripts(root);
+                PrefabUtility.SaveAsPrefabAsset(root, legacyFireball);
+            }
+            finally { PrefabUtility.UnloadPrefabContents(root); }
+        }
+        private static void CreateMaterials()
+        {
+            toxic = MaterialAsset("Toxic", new Color(.12f, .8f, .35f)); fire = MaterialAsset("Fire", new Color(1f, .2f, .02f)); bramble = MaterialAsset("Bramble", new Color(.24f, .06f, .32f)); relic = MaterialAsset("Relic", new Color(1f, .78f, .08f), true);
+            enemyA = MaterialAsset("Melee", new Color(.45f, .08f, .12f)); enemyB = MaterialAsset("Turret", new Color(.2f, .1f, .5f)); enemyC = MaterialAsset("Charger", new Color(.5f, .05f, .55f));
+        }
+        private static Material MaterialAsset(string name, Color color, bool emission = false)
+        {
+            string path = Root + "/Materials/" + name + ".mat"; var existing = AssetDatabase.LoadAssetAtPath<Material>(path); if (existing != null) return existing;
+            var material = new Material(Shader.Find("Universal Render Pipeline/Lit")); material.color = color;
+            if (emission) { material.EnableKeyword("_EMISSION"); material.SetColor("_EmissionColor", color * 2f); }
+            AssetDatabase.CreateAsset(material, path); return material;
+        }
+        private static GameObject CreateProjectilePrefab()
+        {
+            var go = GameObject.CreatePrimitive(PrimitiveType.Sphere); go.name = "CursedBolt"; go.transform.localScale = Vector3.one * .28f; go.GetComponent<Renderer>().sharedMaterial = relic; Object.DestroyImmediate(go.GetComponent<Collider>());
+            return SavePrefab(go, "CursedBolt");
+        }
+        private static GameObject CreateEnemyPrefab(string name, Material material, float healthValue, System.Type controllerType, GameObject projectile)
+        {
+            var root = new GameObject(name); var body = GameObject.CreatePrimitive(PrimitiveType.Capsule); body.name = "Body"; body.transform.SetParent(root.transform); body.transform.localPosition = Vector3.up; body.GetComponent<Renderer>().sharedMaterial = material;
+            var head = GameObject.CreatePrimitive(PrimitiveType.Sphere); head.name = "Head"; head.transform.SetParent(root.transform); head.transform.localPosition = new Vector3(0f, 1.9f, 0f); head.transform.localScale = Vector3.one * .65f; head.GetComponent<Renderer>().sharedMaterial = material;
+            Transform leftArm = CreateVisualPart(root.transform, "Left Arm", new Vector3(-.58f, 1.35f, 0f), new Vector3(.22f, .7f, .22f), material);
+            Transform rightArm = CreateVisualPart(root.transform, "Right Arm", new Vector3(.58f, 1.35f, 0f), new Vector3(.22f, .7f, .22f), material);
+            Transform leftLeg = CreateVisualPart(root.transform, "Left Leg", new Vector3(-.22f, .35f, 0f), new Vector3(.28f, .7f, .28f), material);
+            Transform rightLeg = CreateVisualPart(root.transform, "Right Leg", new Vector3(.22f, .35f, 0f), new Vector3(.28f, .7f, .28f), material);
+            if (controllerType == typeof(TurretEnemy))
+            {
+                Object.DestroyImmediate(body); Object.DestroyImmediate(head); Object.DestroyImmediate(leftArm.gameObject); Object.DestroyImmediate(rightArm.gameObject); Object.DestroyImmediate(leftLeg.gameObject); Object.DestroyImmediate(rightLeg.gameObject);
+                body = GameObject.CreatePrimitive(PrimitiveType.Cylinder); body.name = "Body"; body.transform.SetParent(root.transform); body.transform.localPosition = new Vector3(0f, .6f, 0f); body.transform.localScale = new Vector3(.8f, .6f, .8f); body.GetComponent<Renderer>().sharedMaterial = material;
+                Transform barrel = CreateVisualPart(root.transform, "Turret Barrel", new Vector3(0f, 1.1f, .9f), new Vector3(.25f, .25f, 1.5f), material);
+                head = barrel.gameObject;
+            }
+            foreach (var col in root.GetComponentsInChildren<Collider>()) col.isTrigger = false;
+            return SavePrefab(root, name);
+        }
+        private static Transform CreateVisualPart(Transform parent, string name, Vector3 position, Vector3 scale, Material material)
+        {
+            var part = GameObject.CreatePrimitive(PrimitiveType.Cube); part.name = name; part.transform.SetParent(parent); part.transform.localPosition = position; part.transform.localScale = scale; part.GetComponent<Renderer>().sharedMaterial = material; Object.DestroyImmediate(part.GetComponent<Collider>()); return part.transform;
+        }
+        private static void CreateWorldBar(Transform parent)
+        {
+            var bar = new GameObject("HealthBar"); bar.transform.SetParent(parent); bar.transform.localPosition = new Vector3(0f, 2.75f, 0f); bar.transform.localScale = new Vector3(1.4f, .16f, .1f);
+            var back = GameObject.CreatePrimitive(PrimitiveType.Cube); back.transform.SetParent(bar.transform); back.transform.localScale = Vector3.one; back.GetComponent<Renderer>().sharedMaterial = MaterialAsset("HealthBack", Color.black); Object.DestroyImmediate(back.GetComponent<Collider>());
+            var fill = GameObject.CreatePrimitive(PrimitiveType.Cube); fill.transform.SetParent(bar.transform); fill.name = "Fill"; fill.transform.localPosition = new Vector3(-.5f, 0f, -.06f); fill.transform.localScale = new Vector3(1f, .65f, .3f); fill.GetComponent<Renderer>().sharedMaterial = MaterialAsset("HealthFill", Color.green); Object.DestroyImmediate(fill.GetComponent<Collider>());
+            var script = bar.AddComponent<WorldHealthBar>(); Set(script, "fill", fill.transform);
+        }
+        private static void BuildMainMenu()
+        {
+            var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single); var camera = new GameObject("Menu Camera").AddComponent<Camera>(); camera.transform.position = new Vector3(0f, 2f, -10f); camera.clearFlags = CameraClearFlags.SolidColor; camera.backgroundColor = new Color(.035f, .01f, .06f);
+            new GameObject("SaveSystem").AddComponent<SaveSystem>(); var menu = new GameObject("MenuController").AddComponent<MenuController>(); var audioObject = new GameObject("AudioManager"); audioObject.AddComponent<AudioSource>(); var audio = audioObject.AddComponent<AudioManager>();
+            var canvas = CreateCanvas("Main Menu Canvas"); var panel = CreatePanel(canvas.transform, "Cursed Wilds", new Color(.1f, .025f, .16f, .94f));
+            AddText(panel.transform, "Title", "CURSED WILDS", 68, new Vector2(0f, 180f)); AddText(panel.transform, "Subtitle", "Cleanse the woodland. Recover the Heartwood Relic.", 22, new Vector2(0f, 110f));
+            AddButton(panel.transform, "Play", new Vector2(0f, 15f), menu.Play); AddButton(panel.transform, "Quit", new Vector2(0f, -65f), menu.Quit);
+            SaveScene("MainMenu");
+        }
+        private static void BuildGameplay(GameObject melee, GameObject turret, GameObject charger)
+        {
+            var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single); RenderSettings.ambientLight = new Color(.26f, .18f, .32f); RenderSettings.fog = true; RenderSettings.fogColor = new Color(.12f, .07f, .18f); RenderSettings.fogDensity = .008f;
+            var light = new GameObject("Moonlight").AddComponent<Light>(); light.type = LightType.Directional; light.intensity = 1.2f; light.color = new Color(.55f, .45f, 1f); light.transform.rotation = Quaternion.Euler(50f, -25f, 0f);
+            var terrain = CreateTerrain(); var player = CreatePlayer(OnTerrain(250f, 55f)); new GameObject("SaveSystem").AddComponent<SaveSystem>(); var game = new GameObject("GameFlow").AddComponent<GameFlowManager>(); Set(game, "playerHealth", player.GetComponent<Health>());
+            var audioObject = new GameObject("AudioManager"); audioObject.AddComponent<AudioSource>(); var audio = audioObject.AddComponent<AudioManager>();
+            var canvas = CreateCanvas("Gameplay UI"); CreateHud(canvas.transform, player.GetComponent<Health>(), game, audio, out Text objectiveText, out GameObject over, out GameObject win); Set(game, "gameOverPanel", over); Set(game, "victoryPanel", win); CreatePauseMenu(canvas.transform, game, audio);
+            var objective = new GameObject("ObjectiveTracker").AddComponent<ObjectiveTracker>(); Set(objective, "label", objectiveText);
+            CreateCollectible("Healing Bloom", OnTerrain(260f, 78f), CollectibleKind.Heal, toxic, objective); CreateCollectible("Swift Charm", OnTerrain(345f, 140f), CollectibleKind.Speed, relic, objective); CreateCollectible("Shield Charm", OnTerrain(180f, 360f), CollectibleKind.Shield, enemyB, objective); CreateCollectible("Heartwood Relic", OnTerrain(375f, 365f), CollectibleKind.HeartwoodRelic, relic, objective);
+            CreateHazards(); CreateEnvironmentalDetail(); var director = new GameObject("Enemy Spawn Director").AddComponent<EnemySpawnDirector>(); ConfigureSpawns(director, melee, turret, charger);
+            var surface = terrain.gameObject.AddComponent<NavMeshSurface>(); surface.BuildNavMesh();
+            RemoveMissingScripts(SceneManager.GetActiveScene());
+            SaveScene("CursedWilds");
+        }
+        private static Terrain CreateTerrain()
+        {
+            var data = new TerrainData { heightmapResolution = 513, size = new Vector3(500f, 600f, 500f) }; float[,] heights = new float[513, 513];
+            for (int z = 0; z < 513; z++) for (int x = 0; x < 513; x++) { float nx = x / 512f, nz = z / 512f; heights[z, x] = .04f + Mathf.PerlinNoise(nx * 4f, nz * 4f) * .055f + Mathf.PerlinNoise(nx * 12f, nz * 12f) * .012f; }
+            data.SetHeights(0, 0, heights); AssetDatabase.CreateAsset(data, Root + "/Generated/CursedWildsTerrain.asset"); var terrain = Terrain.CreateTerrainGameObject(data); terrain.name = "Cursed Wilds Terrain"; return terrain.GetComponent<Terrain>();
+        }
+        private static GameObject CreatePlayer(Vector3 position)
+        {
+            var source = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/PlayerPrefab.prefab");
+            if (source == null) throw new System.InvalidOperationException("Required player prefab is missing: Assets/Prefabs/PlayerPrefab.prefab");
+            var player = (GameObject)PrefabUtility.InstantiatePrefab(source); player.name = "Player"; player.tag = "Player"; player.transform.position = position;
+            // Starter Assets owns movement, gravity, jumping, and Mecanim animation. Cursed Wilds only layers gameplay on it.
+            player.AddComponent<Health>(); player.AddComponent<PlayerMovementEffects>(); player.AddComponent<PlayerStatus>(); player.AddComponent<PlayerCombat>();
+            foreach (var listener in player.GetComponentsInChildren<AudioListener>(true)) Object.DestroyImmediate(listener);
+            var cameraGo = new GameObject("Third Person Camera"); cameraGo.tag = "MainCamera"; var camera = cameraGo.AddComponent<Camera>(); cameraGo.AddComponent<AudioListener>(); var follow = cameraGo.AddComponent<ThirdPersonCamera>(); follow.Configure(player.transform); cameraGo.transform.position = position + new Vector3(0f, 3f, -6f); cameraGo.transform.LookAt(player.transform.position + Vector3.up);
+            return player;
+        }
+        private static void CreateCollectible(string name, Vector3 position, CollectibleKind kind, Material material, ObjectiveTracker tracker)
+        {
+            var go = GameObject.CreatePrimitive(PrimitiveType.Cylinder); go.name = name; go.transform.position = position; go.transform.localScale = kind == CollectibleKind.HeartwoodRelic ? new Vector3(1.4f, 2.5f, 1.4f) : new Vector3(.8f, 1.2f, .8f); go.GetComponent<Renderer>().sharedMaterial = material; var col = go.GetComponent<Collider>(); col.isTrigger = true; var collect = go.AddComponent<CollectibleController>(); Set(collect, "kind", kind); Set(collect, "objectives", tracker);
+        }
+        private static void CreateHazards()
+        {
+            Vector3[] positions = { new(100, 34, 100), new(130,34,225), new(210,34,115), new(290,34,230), new(390,34,260), new(75,34,350), new(230,34,315), new(315,34,395), new(420,34,410), new(110,34,430), new(445,34,120), new(50,34,250) };
+            for (int i = 0; i < positions.Length; i++) { Material mat = i % 3 == 0 ? toxic : i % 3 == 1 ? fire : bramble; var type = i % 3 == 0 ? "Toxic Bog" : i % 3 == 1 ? "Fire Pit" : "Cursed Brambles"; var go = GameObject.CreatePrimitive(PrimitiveType.Cylinder); go.name = type + " " + (i + 1); go.transform.position = OnTerrain(positions[i].x, positions[i].z, .1f); go.transform.localScale = new Vector3(8f, .3f, 8f); go.GetComponent<Renderer>().sharedMaterial = mat; var hazard = go.AddComponent<HazardVolume>(); Set(hazard, "slow", i % 3 == 0); Set(hazard, "damagePerSecond", i % 3 == 1 ? 22f : 12f); }
+        }
+        private static void CreateEnvironmentalDetail()
+        {
+            var tree = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/NatureStarterKit/Models/Tree.prefab"); var rocks = new[] { "Assets/NatureStarterKit/Models/rock01.fbx", "Assets/NatureStarterKit/Models/rock02.fbx", "Assets/NatureStarterKit/Models/rock03.fbx" };
+            Material bark = MaterialAsset("Tree Bark", new Color(.16f, .08f, .035f)); Material leaves = MaterialAsset("Tree Leaves", new Color(.075f, .22f, .09f));
+            for (int i = 0; i < 45; i++) { Vector3 pos = OnTerrain(Random.Range(15f, 485f), Random.Range(15f, 485f)); if (tree != null) { var t = (GameObject)PrefabUtility.InstantiatePrefab(tree); t.transform.position = pos; t.transform.localScale = Vector3.one * Random.Range(1.1f, 2.1f); foreach (var renderer in t.GetComponentsInChildren<Renderer>()) renderer.sharedMaterials = new[] { bark, leaves }; } }
+            for (int i = 0; i < 30; i++) { var rock = AssetDatabase.LoadAssetAtPath<GameObject>(rocks[i % rocks.Length]); if (rock != null) { var r = (GameObject)PrefabUtility.InstantiatePrefab(rock); r.transform.position = OnTerrain(Random.Range(10f,490f), Random.Range(10f,490f)); r.transform.localScale = Vector3.one * Random.Range(2f, 5f); } }
+        }
+        private static void ConfigureSpawns(EnemySpawnDirector director, GameObject melee, GameObject turret, GameObject charger)
+        {
+            Vector2[] authoredZones = { new(260f, 88f), new(125f, 135f), new(375f, 150f), new(90f, 300f), new(240f, 285f), new(410f, 315f), new(260f, 430f) };
+            Transform[] zones = new Transform[authoredZones.Length]; for (int i = 0; i < zones.Length; i++) { var z = new GameObject("Enemy Zone " + (i + 1)); z.transform.position = OnTerrain(authoredZones[i].x, authoredZones[i].y); zones[i] = z.transform; }
+            Set(director, "meleePrefab", melee); Set(director, "turretPrefab", turret); Set(director, "chargerPrefab", charger); Set(director, "projectilePrefab", AssetDatabase.LoadAssetAtPath<GameObject>(Root + "/Prefabs/CursedBolt.prefab")); Set(director, "zones", zones); Set(director, "totalEnemies", 21);
+        }
+        private static Canvas CreateCanvas(string name)
+        {
+            var go = new GameObject(name, typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster)); var canvas = go.GetComponent<Canvas>(); canvas.renderMode = RenderMode.ScreenSpaceOverlay; go.GetComponent<CanvasScaler>().uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            if (Object.FindAnyObjectByType<EventSystem>() == null) new GameObject("EventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule));
+            return canvas;
+        }
+        private static GameObject CreatePanel(Transform parent, string name, Color color) { var panel = new GameObject(name, typeof(RectTransform), typeof(Image)); panel.transform.SetParent(parent, false); var rect = panel.GetComponent<RectTransform>(); rect.anchorMin = new Vector2(.5f,.5f); rect.anchorMax = new Vector2(.5f,.5f); rect.sizeDelta = new Vector2(720f,480f); panel.GetComponent<Image>().color = color; return panel; }
+        private static Text AddText(Transform parent, string name, string value, int size, Vector2 position) { var go = new GameObject(name, typeof(RectTransform), typeof(Text)); go.transform.SetParent(parent, false); var rect = go.GetComponent<RectTransform>(); rect.sizeDelta = new Vector2(650f, 70f); rect.anchoredPosition = position; var text = go.GetComponent<Text>(); text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"); text.text = value; text.fontSize = size; text.alignment = TextAnchor.MiddleCenter; text.color = Color.white; return text; }
+        private static void AddButton(Transform parent, string label, Vector2 position, UnityEngine.Events.UnityAction action) { var go = new GameObject(label + " Button", typeof(RectTransform), typeof(Image), typeof(Button)); go.transform.SetParent(parent, false); var rect = go.GetComponent<RectTransform>(); rect.sizeDelta = new Vector2(250f,58f); rect.anchoredPosition = position; go.GetComponent<Image>().color = new Color(.38f,.14f,.55f); var text = AddText(go.transform, "Text", label, 25, Vector2.zero); text.rectTransform.sizeDelta = rect.sizeDelta; UnityEventTools.AddPersistentListener(go.GetComponent<Button>().onClick, action); }
+        private static void CreateHud(Transform canvas, Health playerHealth, GameFlowManager game, AudioManager audio, out Text objective, out GameObject gameOver, out GameObject victory)
+        {
+            var healthBack = new GameObject("Health Back", typeof(RectTransform), typeof(Image)); healthBack.transform.SetParent(canvas, false); var rect = healthBack.GetComponent<RectTransform>(); rect.anchorMin = new Vector2(.5f,1f); rect.anchorMax = new Vector2(.5f,1f); rect.sizeDelta = new Vector2(420f,32f); rect.anchoredPosition = new Vector2(0f,-36f); healthBack.GetComponent<Image>().color = Color.black;
+            var fillGo = new GameObject("Health Fill", typeof(RectTransform), typeof(Image), typeof(HealthBarUI)); fillGo.transform.SetParent(healthBack.transform, false); var fillRect = fillGo.GetComponent<RectTransform>(); fillRect.anchorMin = Vector2.zero; fillRect.anchorMax = Vector2.one; fillRect.offsetMin = new Vector2(3f,3f); fillRect.offsetMax = new Vector2(-3f,-3f); var fill = fillGo.GetComponent<Image>(); fill.color = new Color(.15f,.85f,.35f); fill.type = Image.Type.Filled; fill.fillMethod = Image.FillMethod.Horizontal; var ui = fillGo.GetComponent<HealthBarUI>(); ui.Configure(playerHealth, fill);
+            objective = AddText(canvas, "Objective", "Cursed charms: 0 / 3", 21, new Vector2(0f, -72f)); objective.rectTransform.anchorMin = new Vector2(.5f,1f); objective.rectTransform.anchorMax = new Vector2(.5f,1f);
+            gameOver = CreatePanel(canvas, "Game Over", new Color(.18f,.02f,.04f,.95f)); AddText(gameOver.transform, "Title", "GAME OVER", 56, new Vector2(0f,90f)); AddButton(gameOver.transform, "Restart", new Vector2(0f,0f), game.Restart); AddButton(gameOver.transform, "Main Menu", new Vector2(0f,-75f), game.MainMenu); gameOver.SetActive(false);
+            victory = CreatePanel(canvas, "Victory", new Color(.12f,.2f,.06f,.95f)); AddText(victory.transform, "Title", "THE WILDS ARE CLEANSED", 43, new Vector2(0f,90f)); AddButton(victory.transform, "Restart", new Vector2(0f,0f), game.Restart); AddButton(victory.transform, "Main Menu", new Vector2(0f,-75f), game.MainMenu); victory.SetActive(false);
+        }
+        private static void CreatePauseMenu(Transform canvas, GameFlowManager game, AudioManager audio)
+        {
+            var pause = new GameObject("Pause Menu").AddComponent<PauseMenu>(); var panel = CreatePanel(canvas, "Paused", new Color(.025f,.04f,.09f,.94f)); AddText(panel.transform, "Title", "PAUSED", 54, new Vector2(0f,125f)); AddText(panel.transform, "Hint", "Press Esc to resume", 18, new Vector2(0f,78f)); AddButton(panel.transform, "Resume", new Vector2(0f,15f), pause.Resume); AddButton(panel.transform, "Restart", new Vector2(0f,-55f), pause.Restart); AddButton(panel.transform, "Main Menu", new Vector2(0f,-125f), pause.MainMenu); CreateVolumeControl(panel.transform, audio); Set(pause, "panel", panel); panel.SetActive(false);
+        }
+        private static void CreateVolumeControl(Transform canvas, AudioManager audio)
+        {
+            var label = AddText(canvas, "Volume Label", "VOLUME", 14, new Vector2(0f, -190f)); label.rectTransform.anchorMin = new Vector2(.5f, .5f); label.rectTransform.anchorMax = new Vector2(.5f, .5f); label.rectTransform.sizeDelta = new Vector2(180f, 26f);
+            var sliderObject = new GameObject("Volume Slider", typeof(RectTransform), typeof(Slider)); sliderObject.transform.SetParent(canvas, false); var rect = sliderObject.GetComponent<RectTransform>(); rect.anchorMin = new Vector2(.5f,.5f); rect.anchorMax = new Vector2(.5f,.5f); rect.sizeDelta = new Vector2(180f,20f); rect.anchoredPosition = new Vector2(0f,-215f);
+            var background = new GameObject("Background", typeof(RectTransform), typeof(Image)); background.transform.SetParent(sliderObject.transform, false); background.GetComponent<RectTransform>().anchorMin = Vector2.zero; background.GetComponent<RectTransform>().anchorMax = Vector2.one; background.GetComponent<Image>().color = Color.black;
+            var fillArea = new GameObject("Fill Area", typeof(RectTransform)); fillArea.transform.SetParent(sliderObject.transform, false); var fillAreaRect = fillArea.GetComponent<RectTransform>(); fillAreaRect.anchorMin = Vector2.zero; fillAreaRect.anchorMax = Vector2.one; fillAreaRect.offsetMin = new Vector2(5f, 4f); fillAreaRect.offsetMax = new Vector2(-5f, -4f);
+            var fill = new GameObject("Fill", typeof(RectTransform), typeof(Image)); fill.transform.SetParent(fillArea.transform, false); fill.GetComponent<RectTransform>().anchorMin = Vector2.zero; fill.GetComponent<RectTransform>().anchorMax = Vector2.one; fill.GetComponent<Image>().color = new Color(.35f,.75f,1f);
+            var slider = sliderObject.GetComponent<Slider>(); slider.fillRect = fill.GetComponent<RectTransform>(); slider.value = SaveSystem.Instance == null ? 1f : SaveSystem.Instance.MasterVolume; slider.onValueChanged.AddListener(audio.SetMasterVolume);
+        }
+        private static GameObject SavePrefab(GameObject source, string name)
+        {
+            string path = Root + "/Prefabs/" + name + ".prefab";
+            // Recreate generated prefabs from scratch so an old missing MonoBehaviour cannot survive an overwrite.
+            if (AssetDatabase.LoadMainAssetAtPath(path) != null) AssetDatabase.DeleteAsset(path);
+            var prefab = PrefabUtility.SaveAsPrefabAsset(source, path); Object.DestroyImmediate(source); return prefab;
+        }
+        private static void SaveScene(string name) { EditorSceneManager.SaveScene(SceneManager.GetActiveScene(), Root + "/Scenes/" + name + ".unity"); }
+        private static void SetBuildScenes() => EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(Root + "/Scenes/MainMenu.unity", true), new EditorBuildSettingsScene(Root + "/Scenes/CursedWilds.unity", true) };
+        private static void RemoveMissingScripts(Scene scene)
+        {
+            foreach (GameObject root in scene.GetRootGameObjects()) RemoveMissingScripts(root);
+        }
+        private static void RemoveMissingScripts(GameObject gameObject)
+        {
+            GameObjectUtility.RemoveMonoBehavioursWithMissingScript(gameObject);
+            foreach (Transform child in gameObject.transform) RemoveMissingScripts(child.gameObject);
+        }
+        private static Vector3 OnTerrain(float x, float z, float extraHeight = 1f)
+        {
+            Terrain terrain = Terrain.activeTerrain;
+            return new Vector3(x, terrain == null ? extraHeight : terrain.SampleHeight(new Vector3(x, 0f, z)) + terrain.transform.position.y + extraHeight, z);
+        }
+        private static void Set(Object target, string property, object value) { var so = new SerializedObject(target); var p = so.FindProperty(property); if (p == null) throw new System.ArgumentException(property); if (value is Object obj) p.objectReferenceValue = obj; else if (value is float f) p.floatValue = f; else if (value is int i) p.intValue = i; else if (value is bool b) p.boolValue = b; else if (value is CollectibleKind kind) p.enumValueIndex = (int)kind; else if (value is Transform[] transforms) p.arraySize = transforms.Length; if (value is Transform[] array) for (int i = 0; i < array.Length; i++) p.GetArrayElementAtIndex(i).objectReferenceValue = array[i]; so.ApplyModifiedPropertiesWithoutUndo(); }
+    }
+}
