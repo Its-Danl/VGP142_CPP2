@@ -90,7 +90,7 @@ namespace CursedWilds
         private void ClearSpeedBoost() => speedMultiplier = 1f;
     }
 
-    /// <summary>Applies Cursed Wilds power-up modifiers without competing with Starter Assets movement so that it can be affected by obst.</summary>
+    /// <summary>Applies Cursed Wilds power-up modifiers without competing with Starter Assets movement.</summary>
     [RequireComponent(typeof(StarterAssets.ThirdPersonController))]
     public sealed class PlayerMovementEffects : MonoBehaviour
     {

@@ -15,19 +15,24 @@ namespace CursedWilds
         protected Transform player;
         protected NavMeshAgent agent;
         protected Health health;
-        protected VisualAnimation visualAnimation;
+        protected Animator animator;
         protected float nextAttack;
         // Terrain slopes must not make nearby, open-ground enemies permanently inert.
         protected bool PlayerVisible => player != null && Vector3.Distance(transform.position, player.position) <= detectionRadius;
 
         protected virtual void Awake()
         {
-            health = GetComponent<Health>(); agent = GetComponent<NavMeshAgent>(); visualAnimation = GetComponent<VisualAnimation>(); player = GameObject.FindGameObjectWithTag("Player")?.transform;
+            health = GetComponent<Health>(); agent = GetComponent<NavMeshAgent>(); animator = GetComponentInChildren<Animator>(); player = GameObject.FindGameObjectWithTag("Player")?.transform;
             health.Died += OnDied;
         }
-        protected virtual void Update() { if (player == null) player = GameObject.FindGameObjectWithTag("Player")?.transform; if (healthBar != null && Camera.main != null) healthBar.forward = Camera.main.transform.forward; visualAnimation?.SetMoving(agent != null && agent.enabled && agent.velocity.sqrMagnitude > .05f); }
-        protected void DamagePlayer() { if (player == null || Time.time < nextAttack) return; nextAttack = Time.time + attackCooldown; visualAnimation?.PlayAttack(); player.GetComponent<PlayerStatus>()?.ReceiveDamage(attackDamage, gameObject); AudioManager.PlaySfx(.2f, 180f); }
-        private void OnDied(Health _, GameObject __) { if (agent != null) agent.isStopped = true; VfxFactory.Spawn(transform.position + Vector3.up, Color.magenta, 38); AudioManager.PlaySfx(.45f, 90f); Destroy(gameObject, 1.2f); }
+        protected virtual void Update()
+        {
+            if (player == null) player = GameObject.FindGameObjectWithTag("Player")?.transform;
+            if (healthBar != null && Camera.main != null) healthBar.forward = Camera.main.transform.forward;
+            if (animator != null) animator.SetFloat("Speed", agent != null && agent.enabled ? agent.velocity.magnitude : 0f);
+        }
+        protected void DamagePlayer() { if (player == null || Time.time < nextAttack) return; nextAttack = Time.time + attackCooldown; if (animator != null) animator.SetTrigger("Attack"); player.GetComponent<PlayerStatus>()?.ReceiveDamage(attackDamage, gameObject); AudioManager.PlaySfx(.2f, 180f); }
+        private void OnDied(Health _, GameObject __) { if (agent != null && agent.enabled) agent.isStopped = true; if (animator != null) animator.SetBool("Dead", true); VfxFactory.SpawnEnemyDeath(transform.position + Vector3.up); AudioManager.PlaySfx(.45f, 90f); Destroy(gameObject, 1.4f); }
     }
 
     public sealed class MeleeEnemy : EnemyController
@@ -132,25 +137,8 @@ namespace CursedWilds
         {
             if (template == null) return;
             GameObject enemy = Instantiate(template, position, Quaternion.identity);
-            Health health = enemy.AddComponent<Health>(); health.Configure(type == 0 ? 70f : type == 1 ? 85f : 110f);
-            NavMeshAgent agent = enemy.AddComponent<NavMeshAgent>(); agent.radius = .45f; agent.height = 2f; agent.speed = type == 2 ? 4f : 3.5f; agent.stoppingDistance = 1.7f;
-            if (type == 0) enemy.AddComponent<MeleeEnemy>();
-            else if (type == 1) { agent.enabled = false; enemy.AddComponent<TurretEnemy>().Configure(projectilePrefab); }
-            else enemy.AddComponent<ChargerEnemy>();
-            VisualAnimation animation = enemy.AddComponent<VisualAnimation>(); animation.Configure(FindChild(enemy.transform, "Body"), FindChild(enemy.transform, "Head"), FindChild(enemy.transform, "Left Arm"), FindChild(enemy.transform, "Right Arm"), FindChild(enemy.transform, "Left Leg"), FindChild(enemy.transform, "Right Leg"));
-            CreateHealthBar(enemy.transform, health);
-        }
-        private static Transform FindChild(Transform root, string childName)
-        {
-            Transform found = root.Find(childName);
-            return found != null ? found : root;
-        }
-        private static void CreateHealthBar(Transform parent, Health health) // Just make the thing instead of having it in world
-        {
-            GameObject bar = new GameObject("HealthBar"); bar.transform.SetParent(parent); bar.transform.localPosition = new Vector3(0f, 2.75f, 0f); bar.transform.localScale = new Vector3(1.4f, .16f, .1f);
-            GameObject back = GameObject.CreatePrimitive(PrimitiveType.Cube); back.transform.SetParent(bar.transform); back.transform.localScale = Vector3.one; Object.Destroy(back.GetComponent<Collider>());
-            GameObject fill = GameObject.CreatePrimitive(PrimitiveType.Cube); fill.name = "Fill"; fill.transform.SetParent(bar.transform); fill.transform.localPosition = new Vector3(-.5f, 0f, -.06f); fill.transform.localScale = new Vector3(1f, .65f, .3f); Object.Destroy(fill.GetComponent<Collider>());
-            bar.AddComponent<WorldHealthBar>().Configure(health, fill.transform);
+            Health health = enemy.GetComponent<Health>(); if (health != null) health.Configure(type == 0 ? 70f : type == 1 ? 85f : 110f);
+            if (type == 1) enemy.GetComponent<TurretEnemy>()?.Configure(projectilePrefab);
         }
     }
 }

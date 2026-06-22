@@ -1,7 +1,9 @@
 using System.Collections.Generic;
+using System.Linq;
 using CursedWilds;
 using Unity.AI.Navigation;
 using UnityEditor;
+using UnityEditor.Animations;
 using UnityEditor.Events;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -23,10 +25,11 @@ namespace CursedWilds.Editor
         {
             EditorSettings.serializationMode = SerializationMode.ForceText;
             EnsureFolders(); CleanLegacyPrefabs(); CreateMaterials();
+            AnimatorController enemyAnimator = CreateEnemyAnimatorController();
             GameObject projectile = CreateProjectilePrefab();
-            GameObject melee = CreateEnemyPrefab("MeleeEnemy", enemyA, 70f, typeof(MeleeEnemy), projectile);
-            GameObject turret = CreateEnemyPrefab("TurretEnemy", enemyB, 85f, typeof(TurretEnemy), projectile);
-            GameObject charger = CreateEnemyPrefab("ChargerEnemy", enemyC, 110f, typeof(ChargerEnemy), projectile);
+            GameObject melee = CreateEnemyPrefab("MeleeEnemy", enemyA, 70f, typeof(MeleeEnemy), projectile, enemyAnimator);
+            GameObject turret = CreateEnemyPrefab("TurretEnemy", enemyB, 85f, typeof(TurretEnemy), projectile, enemyAnimator);
+            GameObject charger = CreateEnemyPrefab("ChargerEnemy", enemyC, 110f, typeof(ChargerEnemy), projectile, enemyAnimator);
             BuildMainMenu(); BuildGameplay(melee, turret, charger); SetBuildScenes();
             AssetDatabase.SaveAssets(); AssetDatabase.Refresh();
             Debug.Log("Cursed Wilds scenes and prefabs built successfully.");
@@ -98,22 +101,50 @@ namespace CursedWilds.Editor
             var go = GameObject.CreatePrimitive(PrimitiveType.Sphere); go.name = "CursedBolt"; go.transform.localScale = Vector3.one * .28f; go.GetComponent<Renderer>().sharedMaterial = relic; Object.DestroyImmediate(go.GetComponent<Collider>());
             return SavePrefab(go, "CursedBolt");
         }
-        private static GameObject CreateEnemyPrefab(string name, Material material, float healthValue, System.Type controllerType, GameObject projectile)
+        private static AnimatorController CreateEnemyAnimatorController()
         {
-            var root = new GameObject(name); var body = GameObject.CreatePrimitive(PrimitiveType.Capsule); body.name = "Body"; body.transform.SetParent(root.transform); body.transform.localPosition = Vector3.up; body.GetComponent<Renderer>().sharedMaterial = material;
-            var head = GameObject.CreatePrimitive(PrimitiveType.Sphere); head.name = "Head"; head.transform.SetParent(root.transform); head.transform.localPosition = new Vector3(0f, 1.9f, 0f); head.transform.localScale = Vector3.one * .65f; head.GetComponent<Renderer>().sharedMaterial = material;
-            Transform leftArm = CreateVisualPart(root.transform, "Left Arm", new Vector3(-.58f, 1.35f, 0f), new Vector3(.22f, .7f, .22f), material);
-            Transform rightArm = CreateVisualPart(root.transform, "Right Arm", new Vector3(.58f, 1.35f, 0f), new Vector3(.22f, .7f, .22f), material);
-            Transform leftLeg = CreateVisualPart(root.transform, "Left Leg", new Vector3(-.22f, .35f, 0f), new Vector3(.28f, .7f, .28f), material);
-            Transform rightLeg = CreateVisualPart(root.transform, "Right Leg", new Vector3(.22f, .35f, 0f), new Vector3(.28f, .7f, .28f), material);
-            if (controllerType == typeof(TurretEnemy))
-            {
-                Object.DestroyImmediate(body); Object.DestroyImmediate(head); Object.DestroyImmediate(leftArm.gameObject); Object.DestroyImmediate(rightArm.gameObject); Object.DestroyImmediate(leftLeg.gameObject); Object.DestroyImmediate(rightLeg.gameObject);
-                body = GameObject.CreatePrimitive(PrimitiveType.Cylinder); body.name = "Body"; body.transform.SetParent(root.transform); body.transform.localPosition = new Vector3(0f, .6f, 0f); body.transform.localScale = new Vector3(.8f, .6f, .8f); body.GetComponent<Renderer>().sharedMaterial = material;
-                Transform barrel = CreateVisualPart(root.transform, "Turret Barrel", new Vector3(0f, 1.1f, .9f), new Vector3(.25f, .25f, 1.5f), material);
-                head = barrel.gameObject;
-            }
-            foreach (var col in root.GetComponentsInChildren<Collider>()) col.isTrigger = false;
+            const string modelPath = "Assets/Universal Animation Library 2[Standard]/Unity/UAL2_Standard.fbx";
+            string path = Root + "/Generated/EnemyHumanoid.controller";
+            if (AssetDatabase.LoadAssetAtPath<Object>(path) != null) AssetDatabase.DeleteAsset(path);
+            var controller = AnimatorController.CreateAnimatorControllerAtPath(path);
+            controller.AddParameter("Speed", AnimatorControllerParameterType.Float);
+            controller.AddParameter("Attack", AnimatorControllerParameterType.Trigger);
+            controller.AddParameter("Dead", AnimatorControllerParameterType.Bool);
+            var clips = AssetDatabase.LoadAllAssetsAtPath(modelPath).OfType<AnimationClip>().Where(clip => !clip.name.StartsWith("__preview__")).ToDictionary(clip => clip.name, clip => clip);
+            AnimationClip Clip(string key) => clips.First(pair => pair.Key.EndsWith(key)).Value;
+            var stateMachine = controller.layers[0].stateMachine;
+            var idle = stateMachine.AddState("Idle"); idle.motion = Clip("Zombie_Idle_Loop"); stateMachine.defaultState = idle;
+            var walk = stateMachine.AddState("Walk"); walk.motion = Clip("Zombie_Walk_Fwd_Loop");
+            var attack = stateMachine.AddState("Attack"); attack.motion = Clip("Melee_Hook");
+            var dead = stateMachine.AddState("Dead"); dead.motion = Clip("Hit_Knockback");
+            var toWalk = idle.AddTransition(walk); toWalk.AddCondition(AnimatorConditionMode.Greater, .05f, "Speed"); toWalk.hasExitTime = false;
+            var toIdle = walk.AddTransition(idle); toIdle.AddCondition(AnimatorConditionMode.Less, .05f, "Speed"); toIdle.hasExitTime = false;
+            var attackTransition = stateMachine.AddAnyStateTransition(attack); attackTransition.AddCondition(AnimatorConditionMode.If, 0f, "Attack"); attackTransition.hasExitTime = false; attackTransition.duration = .05f;
+            var attackExit = attack.AddTransition(idle); attackExit.hasExitTime = true; attackExit.exitTime = .9f; attackExit.duration = .08f;
+            var deadTransition = stateMachine.AddAnyStateTransition(dead); deadTransition.AddCondition(AnimatorConditionMode.If, 0f, "Dead"); deadTransition.hasExitTime = false; deadTransition.duration = .05f;
+            AssetDatabase.SaveAssets();
+            return controller;
+        }
+        private static GameObject CreateEnemyPrefab(string name, Material material, float healthValue, System.Type controllerType, GameObject projectile, AnimatorController enemyAnimator)
+        {
+            const string modelPath = "Assets/Universal Animation Library 2[Standard]/Unity/UAL2_Standard.fbx";
+            var source = AssetDatabase.LoadAssetAtPath<GameObject>(modelPath);
+            if (source == null) throw new System.InvalidOperationException("Required UAL enemy model is missing.");
+            var root = new GameObject(name);
+            var model = (GameObject)PrefabUtility.InstantiatePrefab(source); model.name = "Model"; model.transform.SetParent(root.transform, false); model.transform.localScale = Vector3.one;
+            var animator = model.GetComponent<Animator>(); if (animator == null) animator = model.AddComponent<Animator>(); animator.runtimeAnimatorController = enemyAnimator; animator.applyRootMotion = false;
+            foreach (var renderer in model.GetComponentsInChildren<Renderer>()) renderer.sharedMaterial = material;
+            var collider = root.AddComponent<CapsuleCollider>(); collider.height = 1.8f; collider.radius = .35f; collider.center = new Vector3(0f, .9f, 0f);
+            var health = root.AddComponent<Health>(); health.Configure(healthValue);
+            var agent = root.AddComponent<NavMeshAgent>(); agent.radius = .35f; agent.height = 1.8f; agent.speed = controllerType == typeof(ChargerEnemy) ? 4.5f : 3.5f; agent.stoppingDistance = 1.7f;
+            if (controllerType == typeof(MeleeEnemy)) root.AddComponent<MeleeEnemy>();
+            else if (controllerType == typeof(TurretEnemy)) { agent.enabled = false; root.AddComponent<TurretEnemy>().Configure(projectile); }
+            else root.AddComponent<ChargerEnemy>();
+            CreateWorldBar(root.transform);
+            if (controllerType == typeof(MeleeEnemy)) CreateVisualPart(root.transform, "Claw", new Vector3(.35f, 1.05f, .45f), new Vector3(.14f, .14f, .65f), relic);
+            if (controllerType == typeof(TurretEnemy)) { CreateVisualPart(root.transform, "Arcane Staff", new Vector3(0f, 1.05f, .6f), new Vector3(.18f, .18f, 1.25f), relic); CreateVisualPart(root.transform, "Focus", new Vector3(0f, 1.55f, 0f), new Vector3(.55f, .2f, .55f), relic); }
+            if (controllerType == typeof(ChargerEnemy)) { CreateVisualPart(root.transform, "Horn L", new Vector3(-.28f, 1.65f, .2f), new Vector3(.12f, .12f, .65f), relic); CreateVisualPart(root.transform, "Horn R", new Vector3(.28f, 1.65f, .2f), new Vector3(.12f, .12f, .65f), relic); }
+            RemoveMissingScripts(root);
             return SavePrefab(root, name);
         }
         private static Transform CreateVisualPart(Transform parent, string name, Vector3 position, Vector3 scale, Material material)
@@ -145,16 +176,65 @@ namespace CursedWilds.Editor
             var canvas = CreateCanvas("Gameplay UI"); CreateHud(canvas.transform, player.GetComponent<Health>(), game, audio, out Text objectiveText, out GameObject over, out GameObject win); Set(game, "gameOverPanel", over); Set(game, "victoryPanel", win); CreatePauseMenu(canvas.transform, game, audio);
             var objective = new GameObject("ObjectiveTracker").AddComponent<ObjectiveTracker>(); Set(objective, "label", objectiveText);
             CreateCollectible("Healing Bloom", OnTerrain(260f, 78f), CollectibleKind.Heal, toxic, objective); CreateCollectible("Swift Charm", OnTerrain(345f, 140f), CollectibleKind.Speed, relic, objective); CreateCollectible("Shield Charm", OnTerrain(180f, 360f), CollectibleKind.Shield, enemyB, objective); CreateCollectible("Heartwood Relic", OnTerrain(375f, 365f), CollectibleKind.HeartwoodRelic, relic, objective);
-            CreateHazards(); CreateEnvironmentalDetail(); var director = new GameObject("Enemy Spawn Director").AddComponent<EnemySpawnDirector>(); ConfigureSpawns(director, melee, turret, charger);
+            CreatePathsAndRuins(); CreateHazards(); CreateEnvironmentalDetail(); var director = new GameObject("Enemy Spawn Director").AddComponent<EnemySpawnDirector>(); ConfigureSpawns(director, melee, turret, charger);
             var surface = terrain.gameObject.AddComponent<NavMeshSurface>(); surface.BuildNavMesh();
             RemoveMissingScripts(SceneManager.GetActiveScene());
             SaveScene("CursedWilds");
         }
         private static Terrain CreateTerrain()
         {
-            var data = new TerrainData { heightmapResolution = 513, size = new Vector3(500f, 600f, 500f) }; float[,] heights = new float[513, 513];
-            for (int z = 0; z < 513; z++) for (int x = 0; x < 513; x++) { float nx = x / 512f, nz = z / 512f; heights[z, x] = .04f + Mathf.PerlinNoise(nx * 4f, nz * 4f) * .055f + Mathf.PerlinNoise(nx * 12f, nz * 12f) * .012f; }
-            data.SetHeights(0, 0, heights); AssetDatabase.CreateAsset(data, Root + "/Generated/CursedWildsTerrain.asset"); var terrain = Terrain.CreateTerrainGameObject(data); terrain.name = "Cursed Wilds Terrain"; return terrain.GetComponent<Terrain>();
+            string terrainPath = Root + "/Generated/CursedWildsTerrain.asset";
+            if (AssetDatabase.LoadAssetAtPath<TerrainData>(terrainPath) != null) AssetDatabase.DeleteAsset(terrainPath);
+            var data = new TerrainData { heightmapResolution = 513, alphamapResolution = 512, size = new Vector3(500f, 600f, 500f) }; float[,] heights = new float[513, 513];
+            for (int z = 0; z < 513; z++) for (int x = 0; x < 513; x++)
+            {
+                float nx = x / 512f, nz = z / 512f;
+                float ridge = Mathf.PerlinNoise(nx * 2.4f + 9f, nz * 2.4f + 4f) * .065f;
+                float detail = Mathf.PerlinNoise(nx * 11f, nz * 11f) * .012f;
+                float clearing = Mathf.Exp(-((nx - .5f) * (nx - .5f) + (nz - .14f) * (nz - .14f)) * 24f) * .045f;
+                heights[z, x] = .035f + ridge + detail - clearing;
+            }
+            data.SetHeights(0, 0, heights);
+            data.terrainLayers = new[]
+            {
+                TerrainLayerAsset("GrassLayer", "Assets/NatureStarterKit/Textures/groundgrass01.tga", "Assets/NatureStarterKit/Textures/groundgrass01N.tga", 16f),
+                TerrainLayerAsset("EarthLayer", "Assets/NatureStarterKit/Textures/ground01.tga", "Assets/NatureStarterKit/Textures/ground01N.tga", 20f),
+                TerrainLayerAsset("BarkLayer", "Assets/NatureStarterKit/Textures/bark01.tga", "Assets/NatureStarterKit/Textures/bark01N.tga", 12f)
+            };
+            float[,,] splat = new float[512, 512, 3];
+            for (int z = 0; z < 512; z++) for (int x = 0; x < 512; x++)
+            {
+                float nx = x / 511f, nz = z / 511f;
+                float pathBlend = Mathf.Clamp01(1f - Mathf.Min(Mathf.Abs(nx - .5f) * 13f, Mathf.Abs(nz - .52f) * 13f));
+                float cursed = Mathf.PerlinNoise(nx * 8f, nz * 8f) > .72f ? .22f : 0f;
+                float earth = Mathf.Clamp01(pathBlend * .72f + cursed); float bark = cursed * .4f; float grass = Mathf.Max(0f, 1f - earth - bark); float total = grass + earth + bark;
+                splat[z, x, 0] = grass / total; splat[z, x, 1] = earth / total; splat[z, x, 2] = bark / total;
+            }
+            data.SetAlphamaps(0, 0, splat);
+            AssetDatabase.CreateAsset(data, terrainPath); var terrainObject = Terrain.CreateTerrainGameObject(data); terrainObject.name = "Cursed Wilds Terrain"; var terrain = terrainObject.GetComponent<Terrain>(); terrain.drawInstanced = true; return terrain;
+        }
+        private static TerrainLayer TerrainLayerAsset(string name, string diffusePath, string normalPath, float tileSize)
+        {
+            string path = Root + "/Generated/" + name + ".terrainlayer";
+            var layer = AssetDatabase.LoadAssetAtPath<TerrainLayer>(path);
+            if (layer == null) { layer = new TerrainLayer(); AssetDatabase.CreateAsset(layer, path); }
+            layer.diffuseTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(diffusePath); layer.normalMapTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(normalPath); layer.tileSize = Vector2.one * tileSize; EditorUtility.SetDirty(layer); return layer;
+        }
+        private static void CreatePathsAndRuins()
+        {
+            Material pathMaterial = MaterialAsset("Path Stone", new Color(.22f, .18f, .14f)); Material ruinMaterial = MaterialAsset("Ruin Stone", new Color(.32f, .3f, .35f));
+            for (int i = 0; i < 22; i++)
+            {
+                float z = 28f + i * 20f; var segment = GameObject.CreatePrimitive(PrimitiveType.Cube); segment.name = "Worn Path"; segment.transform.position = OnTerrain(250f + Mathf.Sin(i * .75f) * 8f, z, .08f); segment.transform.localScale = new Vector3(11f, .15f, 18f); segment.GetComponent<Renderer>().sharedMaterial = pathMaterial;
+            }
+            for (int ruin = 0; ruin < 3; ruin++)
+            {
+                Vector2 center = ruin == 0 ? new Vector2(120f, 115f) : ruin == 1 ? new Vector2(385f, 235f) : new Vector2(185f, 390f);
+                for (int i = 0; i < 6; i++)
+                {
+                    float angle = i * 60f * Mathf.Deg2Rad; var pillar = GameObject.CreatePrimitive(PrimitiveType.Cube); pillar.name = "Forgotten Ruin Pillar"; pillar.transform.position = OnTerrain(center.x + Mathf.Cos(angle) * 8f, center.y + Mathf.Sin(angle) * 8f, 2.2f); pillar.transform.localScale = new Vector3(1.4f, 4.4f, 1.4f); pillar.transform.rotation = Quaternion.Euler(0f, i * 60f, i % 2 == 0 ? 6f : -5f); pillar.GetComponent<Renderer>().sharedMaterial = ruinMaterial;
+                }
+            }
         }
         private static GameObject CreatePlayer(Vector3 position)
         {

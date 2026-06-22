@@ -108,7 +108,7 @@ namespace CursedWilds
             if (kind == CollectibleKind.HeartwoodRelic && (objectives == null || !objectives.HasRequirements)) return;
             collected = true;
             switch (kind) { case CollectibleKind.Heal: status.Heal(45f); break; case CollectibleKind.Speed: status.Speed(1.45f, 12f); break; case CollectibleKind.Shield: status.Shield(12f); break; }
-            objectives?.Collected(kind); VfxFactory.Spawn(transform.position, kind == CollectibleKind.HeartwoodRelic ? Color.yellow : Color.cyan, kind == CollectibleKind.HeartwoodRelic ? 70 : 28);
+            objectives?.Collected(kind); VfxFactory.SpawnPickup(transform.position, kind == CollectibleKind.HeartwoodRelic);
             AudioManager.PlaySfx(kind == CollectibleKind.HeartwoodRelic ? .8f : .45f, kind == CollectibleKind.HeartwoodRelic ? 820f : 520f);
             SaveSystem.Instance?.MarkCollected(kind);
             if (kind == CollectibleKind.HeartwoodRelic) GameFlowManager.Instance?.Victory();
@@ -200,7 +200,13 @@ namespace CursedWilds
         [SerializeField] private AudioMixer mixer;
         [SerializeField] private AudioSource music;
         public static AudioManager Instance { get; private set; }
-        private void Awake() { Instance = this; if (music == null) music = GetComponent<AudioSource>(); if (music != null && music.clip == null) { music.clip = Tone(110f, 2f); music.loop = true; music.volume = .12f; music.Play(); } SetMasterVolume(SaveSystem.Instance == null ? 1f : SaveSystem.Instance.MasterVolume); }
+        private void Awake()
+        {
+            Instance = this;
+            if (music == null) music = GetComponent<AudioSource>();
+            if (music != null && music.clip == null) { music.clip = CreateScore(SceneManager.GetActiveScene().name == "MainMenu" ? 92f : 72f); music.loop = true; music.volume = .16f; music.Play(); }
+            SetMasterVolume(SaveSystem.Instance == null ? 1f : SaveSystem.Instance.MasterVolume);
+        }
         public void SetMasterVolume(float slider) { slider = Mathf.Clamp01(slider); AudioListener.volume = slider; if (mixer != null) mixer.SetFloat("MasterVolume", Mathf.Lerp(-80f, 0f, slider)); SaveSystem.Instance?.SetMasterVolume(slider); }
         public static void PlaySfx(float duration, float frequency)
         {
@@ -212,13 +218,30 @@ namespace CursedWilds
             for (int i = 0; i < samples; i++) { float envelope = Mathf.Clamp01(1f - (float)i / samples); data[i] = Mathf.Sin(2f * Mathf.PI * frequency * i / rate) * envelope * .22f; }
             clip.SetData(data, 0); return clip;
         }
+        private static AudioClip CreateScore(float root)
+        {
+            const int rate = 22050; const float duration = 12f; int samples = Mathf.CeilToInt(rate * duration); var clip = AudioClip.Create("CursedWildsScore", samples, 1, rate, false); var data = new float[samples];
+            float[] chord = { 1f, 1.1892f, 1.4983f, 1.7818f };
+            for (int i = 0; i < samples; i++)
+            {
+                float t = i / (float)rate; float bar = Mathf.Floor(t / 3f); float low = root * chord[(int)bar % chord.Length]; float drone = Mathf.Sin(2f * Mathf.PI * low * t) * .11f + Mathf.Sin(2f * Mathf.PI * low * .5f * t) * .08f;
+                float pulse = Mathf.Pow(Mathf.Max(0f, Mathf.Sin(2f * Mathf.PI * (t % .75f) / .75f)), 8f) * Mathf.Sin(2f * Mathf.PI * low * 2f * t) * .045f;
+                data[i] = (drone + pulse) * (.72f + Mathf.Sin(t * .14f) * .08f);
+            }
+            clip.SetData(data, 0); return clip;
+        }
     }
 
     public static class VfxFactory
     {
-        public static void Spawn(Vector3 position, Color color, int count)
+        public static void SpawnPickup(Vector3 position, bool relic)
         {
-            var go = new GameObject("EventParticles"); go.transform.position = position; var ps = go.AddComponent<ParticleSystem>(); var main = ps.main; main.startColor = color; main.startLifetime = .8f; main.startSpeed = 3f; main.maxParticles = count; var emission = ps.emission; emission.SetBursts(new[] { new ParticleSystem.Burst(0f, (short)count) }); var shape = ps.shape; shape.shapeType = ParticleSystemShapeType.Sphere; shape.radius = .25f; ps.Play(); UnityEngine.Object.Destroy(go, 1.5f);
+            var go = new GameObject(relic ? "RelicVictoryParticles" : "PickupParticles"); go.transform.position = position; var ps = go.AddComponent<ParticleSystem>(); var main = ps.main; main.startColor = relic ? new Color(1f,.78f,.08f) : Color.cyan; main.startLifetime = relic ? 1.8f : .8f; main.startSpeed = relic ? 5f : 2.5f; main.maxParticles = relic ? 90 : 35; var emission = ps.emission; emission.SetBursts(new[] { new ParticleSystem.Burst(0f, (short)(relic ? 90 : 35)) }); var shape = ps.shape; shape.shapeType = relic ? ParticleSystemShapeType.Cone : ParticleSystemShapeType.Sphere; shape.radius = .25f; ps.Play(); UnityEngine.Object.Destroy(go, relic ? 2.4f : 1.4f);
         }
+        public static void SpawnEnemyDeath(Vector3 position)
+        {
+            var go = new GameObject("EnemyDeathParticles"); go.transform.position = position; var ps = go.AddComponent<ParticleSystem>(); var main = ps.main; main.startColor = new Color(.8f,.08f,1f); main.startLifetime = 1.1f; main.startSpeed = 4.2f; main.maxParticles = 48; var emission = ps.emission; emission.SetBursts(new[] { new ParticleSystem.Burst(0f, 48) }); var shape = ps.shape; shape.shapeType = ParticleSystemShapeType.Hemisphere; shape.radius = .45f; ps.Play(); UnityEngine.Object.Destroy(go, 1.7f);
+        }
+        public static void Spawn(Vector3 position, Color color, int count) => SpawnEnemyDeath(position);
     }
 }
