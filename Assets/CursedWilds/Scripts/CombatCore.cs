@@ -208,11 +208,14 @@ namespace CursedWilds
     public sealed partial class PlayerStatus : MonoBehaviour
     {
         [SerializeField] private float shieldMultiplier = .5f;
+        [SerializeField] private bool logDebug = true;
         private Health health; private ThirdPersonPlayer player; private PlayerMovementEffects starterPlayer; private float shieldUntil;
         private void Awake()
         {
-            health = GetComponent<Health>(); player = GetComponent<ThirdPersonPlayer>(); starterPlayer = GetComponent<PlayerMovementEffects>();
-            if (health != null) health.Died += OnDied;
+            health = GetComponent<Health>();
+            if (health == null) health = gameObject.AddComponent<Health>();
+            player = GetComponent<ThirdPersonPlayer>(); starterPlayer = GetComponent<PlayerMovementEffects>();
+            health.Died += OnDied;
         }
         private void OnDestroy() { if (health != null) health.Died -= OnDied; }
         public void Heal(float value) => health.Heal(value);
@@ -227,7 +230,14 @@ namespace CursedWilds
             else if (player != null) player.ApplySlow(duration);
         }
         public void Shield(float duration) => shieldUntil = Mathf.Max(shieldUntil, Time.time + duration);
-        public void ReceiveDamage(float value, GameObject source = null) { health.ApplyDamage(Time.time < shieldUntil ? value * shieldMultiplier : value, source); AudioManager.PlaySfx(.08f, 95f); }
+        public void ReceiveDamage(float value, GameObject source = null)
+        {
+            if (health == null) health = GetComponent<Health>() ?? gameObject.AddComponent<Health>();
+            float actual = Time.time < shieldUntil ? value * shieldMultiplier : value;
+            if (logDebug) Debug.Log($"[PlayerStatus] ReceiveDamage {value} (shielded={Time.time < shieldUntil}) -> HP {health.CurrentHealth}/{health.MaximumHealth}");
+            health.ApplyDamage(actual, source);
+            AudioManager.PlaySfx(.08f, 95f);
+        }
         private void OnDied(Health _, GameObject __)
         {
             var starter = GetComponent<StarterAssets.ThirdPersonController>(); if (starter != null) starter.enabled = false;
@@ -240,12 +250,30 @@ namespace CursedWilds
         [SerializeField] private Health target;
         [SerializeField] private Image fill;
         [SerializeField] private float smoothing = 8f;
+        [SerializeField] private bool logDebug = true;
         private float desired = 1f;
+        private bool useScaleFallback;
+        private Vector3 initialScale;
+
         public void Configure(Health health, Image image) { target = health; fill = image; }
         private void Start()
         {
             if (target == null) target = GameObject.FindGameObjectWithTag("Player")?.GetComponent<Health>();
             if (fill == null) fill = GetComponentInChildren<Image>();
+
+            if (fill == null)
+            {
+                Debug.LogError("[HealthBarUI] No Image found! Assign the 'fill' field in the Inspector.");
+                return;
+            }
+
+            // Force Filled mode so fillAmount actually drives the visible bar.
+            fill.fillMethod = Image.FillMethod.Horizontal;
+            fill.type = Image.Type.Filled;
+            initialScale = fill.rectTransform.localScale;
+
+            if (logDebug) Debug.Log($"[HealthBarUI] Bound to target={(target != null ? target.gameObject.name : "NULL")}, Image={fill.gameObject.name}");
+
             if (target != null) Bind(target);
         }
         public void Bind(Health health)
@@ -258,11 +286,17 @@ namespace CursedWilds
             if (fill != null) fill.fillAmount = desired;
         }
         private void OnDestroy() { if (target != null) target.Changed -= OnChanged; }
-        private void OnChanged(float current, float maximum) => desired = Mathf.Clamp01(current / maximum);
+        private void OnChanged(float current, float maximum)
+        {
+            desired = Mathf.Clamp01(current / maximum);
+            if (logDebug) Debug.Log($"[HealthBarUI] Health changed: {current}/{maximum} = {desired:P0}");
+        }
         private void Update()
         {
             if (fill == null) return;
             fill.fillAmount = Mathf.Lerp(fill.fillAmount, desired, Time.deltaTime * smoothing);
+            // Scale fallback in case Filled image setup is still broken in Inspector.
+            fill.rectTransform.localScale = new Vector3(Mathf.Lerp(fill.rectTransform.localScale.x, desired, Time.deltaTime * smoothing), initialScale.y, initialScale.z);
         }
     }
 }

@@ -65,20 +65,11 @@ namespace CursedWilds
     public sealed partial class ObjectiveTracker : MonoBehaviour
     {
         [SerializeField] private Text label;
-        [SerializeField] private bool loadFromSave = true;
         private readonly HashSet<CollectibleKind> required = new HashSet<CollectibleKind>();
         public bool HasRequirements => required.Contains(CollectibleKind.Heal) && required.Contains(CollectibleKind.Speed) && required.Contains(CollectibleKind.Shield);
         public int RequiredCount => required.Count;
 
-        private void Start()
-        {
-            if (loadFromSave)
-            {
-                foreach (CollectibleKind kind in new[] { CollectibleKind.Heal, CollectibleKind.Speed, CollectibleKind.Shield })
-                    if (SaveSystem.Instance != null && SaveSystem.Instance.WasCollected(kind)) required.Add(kind);
-            }
-            Refresh();
-        }
+        private void Start() => Refresh();
         public void Collected(CollectibleKind kind)
         {
             if (kind != CollectibleKind.HeartwoodRelic) required.Add(kind);
@@ -118,7 +109,6 @@ namespace CursedWilds
             switch (kind) { case CollectibleKind.Heal: status.Heal(45f); break; case CollectibleKind.Speed: status.Speed(1.45f, 12f); break; case CollectibleKind.Shield: status.Shield(12f); break; }
             objectives?.Collected(kind); VfxFactory.SpawnPickup(transform.position, kind == CollectibleKind.HeartwoodRelic);
             AudioManager.PlaySfx(kind == CollectibleKind.HeartwoodRelic ? .8f : .45f, kind == CollectibleKind.HeartwoodRelic ? 820f : 520f);
-            SaveSystem.Instance?.MarkCollected(kind);
             if (kind == CollectibleKind.HeartwoodRelic) GameFlowManager.Instance?.Victory();
             Destroy(gameObject);
         }
@@ -129,9 +119,7 @@ namespace CursedWilds
     {
         [SerializeField] private float damagePerSecond = 12f;
         [SerializeField] private bool slow;
-        [SerializeField] private Vector3 boxSize = new Vector3(10f, 4f, 10f);
         private Collider volumeCollider;
-        private readonly HashSet<PlayerStatus> activePlayers = new HashSet<PlayerStatus>();
 
         private void Awake()
         {
@@ -139,33 +127,23 @@ namespace CursedWilds
             if (volumeCollider != null) volumeCollider.isTrigger = true;
         }
 
-        private void OnTriggerEnter(Collider other)
-        {
-            PlayerStatus status = other.GetComponentInParent<PlayerStatus>();
-            if (status != null) activePlayers.Add(status);
-        }
-
-        private void OnTriggerExit(Collider other)
-        {
-            PlayerStatus status = other.GetComponentInParent<PlayerStatus>();
-            if (status != null) activePlayers.Remove(status);
-        }
-
+        // Distance/bounds-based detection — works reliably against CharacterController.
         private void Update()
         {
-            if (activePlayers.Count == 0) return;
-            float damageThisFrame = damagePerSecond * Time.deltaTime;
-            foreach (PlayerStatus status in activePlayers)
-            {
-                if (status == null) continue;
-                status.ReceiveDamage(damageThisFrame, gameObject);
-                if (slow) status.Slow(.25f);
-            }
+            GameObject player = GameObject.FindGameObjectWithTag("Player");
+            if (player == null || volumeCollider == null) return;
+            Vector3 closest = volumeCollider.ClosestPoint(player.transform.position);
+            // ClosestPoint returns the input point when it is inside the collider, otherwise the nearest surface point.
+            if (closest == player.transform.position && volumeCollider.bounds.Contains(player.transform.position))
+                ApplyTo(player);
         }
 
-        private void OnDestroy()
+        private void ApplyTo(GameObject candidate)
         {
-            activePlayers.Clear();
+            PlayerStatus status = candidate.GetComponentInParent<PlayerStatus>();
+            if (status == null) return;
+            status.ReceiveDamage(damagePerSecond * Time.deltaTime, gameObject);
+            if (slow) status.Slow(.25f);
         }
     }
 
@@ -258,7 +236,7 @@ namespace CursedWilds
             for (int i = 0; i < samples; i++)
             {
                 float t = i / (float)rate; float bar = Mathf.Floor(t / 3f); float low = root * chord[(int)bar % chord.Length]; float drone = Mathf.Sin(2f * Mathf.PI * low * t) * .11f + Mathf.Sin(2f * Mathf.PI * low * .5f * t) * .08f;
-                float pulse = Mathf.Pow(Mathf.Max(0f, Mathf.Sin(2f * Mathf.PI * (t % .75f) / .75f)), 8f) * Mathf.Sin(2f * Mathf.PI * low * 2f * now) * .045f;
+                float pulse = Mathf.Pow(Mathf.Max(0f, Mathf.Sin(2f * Mathf.PI * (t % .75f) / .75f)), 8f) * Mathf.Sin(2f * Mathf.PI * low * 2f * t) * .045f;
                 data[i] = (drone + pulse) * (.72f + Mathf.Sin(t * .14f) * .08f);
             }
             clip.SetData(data, 0); return clip;

@@ -198,29 +198,28 @@ namespace CursedWilds
         private float damage = 14f;
         private float maxLifetime = 4f;
         private float spawnTime;
+        private Transform player;
+        private const float HitRadius = 1.1f;
 
-        public void Launch(Transform player)
+        public void Launch(Transform playerTarget)
         {
-            direction = ((player.position + Vector3.up) - transform.position).normalized;
+            direction = ((playerTarget.position + Vector3.up) - transform.position).normalized;
             transform.forward = direction;
+            player = playerTarget;
             spawnTime = Time.time;
             Destroy(gameObject, maxLifetime);
         }
         private void Update()
         {
             transform.position += direction * speed * Time.deltaTime;
-        }
-        private void OnTriggerEnter(Collider other)
-        {
-            if (other.CompareTag("Player") || other.transform.root.CompareTag("Player"))
+
+            // Distance-based hit detection — works reliably against CharacterController.
+            if (player != null && Vector3.Distance(transform.position, player.position + Vector3.up) < HitRadius)
             {
-                PlayerStatus status = other.GetComponentInParent<PlayerStatus>();
-                if (status != null)
-                {
-                    status.ReceiveDamage(damage, gameObject);
-                    VfxFactory.Spawn(transform.position, Color.red, 15);
-                    Destroy(gameObject);
-                }
+                PlayerStatus status = player.GetComponentInParent<PlayerStatus>();
+                if (status != null) status.ReceiveDamage(damage, gameObject);
+                VfxFactory.Spawn(transform.position, Color.red, 15);
+                Destroy(gameObject);
             }
         }
     }
