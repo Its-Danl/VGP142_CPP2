@@ -8,7 +8,7 @@ namespace CursedWilds.Editor
     {
         private const string GameplayScene = "Assets/CursedWilds/Scenes/CursedWilds.unity";
 
-        [MenuItem("Cursed Wilds/Open Gameplay %#g")]
+        [MenuItem("Cursed Wilds/Open Gameplay")]
         private static void Open()
         {
             EditorSceneManager.OpenScene(GameplayScene, OpenSceneMode.Single);

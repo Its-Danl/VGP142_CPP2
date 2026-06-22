@@ -12,7 +12,7 @@ namespace CursedWilds
         void ApplyDamage(float amount, GameObject source = null);
     }
 
-    public sealed class Health : MonoBehaviour, IDamageable
+    public sealed partial class Health : MonoBehaviour, IDamageable
     {
         [SerializeField, Min(1f)] private float maximumHealth = 100f;
         [SerializeField] private float currentHealth = 100f;
@@ -40,7 +40,7 @@ namespace CursedWilds
     }
 
     [RequireComponent(typeof(CharacterController), typeof(Health))]
-    public sealed class ThirdPersonPlayer : MonoBehaviour
+    public sealed partial class ThirdPersonPlayer : MonoBehaviour
     {
         [SerializeField] private float walkSpeed = 5f;
         [SerializeField] private float sprintSpeed = 8f;
@@ -92,7 +92,7 @@ namespace CursedWilds
 
     /// <summary>Applies Cursed Wilds power-up modifiers without competing with Starter Assets movement.</summary>
     [RequireComponent(typeof(StarterAssets.ThirdPersonController))]
-    public sealed class PlayerMovementEffects : MonoBehaviour
+    public sealed partial class PlayerMovementEffects : MonoBehaviour
     {
         private StarterAssets.ThirdPersonController controller;
         private float baseMoveSpeed;
@@ -127,7 +127,7 @@ namespace CursedWilds
         public void ApplySlow(float duration) => slowUntil = Mathf.Max(slowUntil, Time.time + duration);
     }
 
-    public sealed class ThirdPersonCamera : MonoBehaviour
+    public sealed partial class ThirdPersonCamera : MonoBehaviour
     {
         [SerializeField] private Transform target;
         [SerializeField] private Vector3 offset = new Vector3(0f, 2.8f, -6.5f);
@@ -159,7 +159,7 @@ namespace CursedWilds
     }
 
     [RequireComponent(typeof(Health))]
-    public sealed class PlayerCombat : MonoBehaviour
+    public sealed partial class PlayerCombat : MonoBehaviour
     {
         [SerializeField] private float damage = 25f;
         [SerializeField] private float range = 2f;
@@ -203,7 +203,7 @@ namespace CursedWilds
         }
     }
 
-    public sealed class PlayerStatus : MonoBehaviour
+    public sealed partial class PlayerStatus : MonoBehaviour
     {
         [SerializeField] private float shieldMultiplier = .5f;
         private Health health; private ThirdPersonPlayer player; private PlayerMovementEffects starterPlayer; private float shieldUntil;
@@ -233,7 +233,7 @@ namespace CursedWilds
         }
     }
 
-    public sealed class HealthBarUI : MonoBehaviour
+    public sealed partial class HealthBarUI : MonoBehaviour
     {
         [SerializeField] private Health target;
         [SerializeField] private Image fill;

@@ -19,7 +19,7 @@ namespace CursedWilds
     }
 
     /// <summary>Small local encrypted JSON save for player collectibles and audio settings.</summary>
-    public sealed class SaveSystem : MonoBehaviour
+    public sealed partial class SaveSystem : MonoBehaviour
     {
         private const byte Key = 0x5D;
         private static string SavePath => Path.Combine(Application.persistentDataPath, "cursed-wilds.save");
@@ -61,7 +61,7 @@ namespace CursedWilds
         }
     }
 
-    public sealed class ObjectiveTracker : MonoBehaviour
+    public sealed partial class ObjectiveTracker : MonoBehaviour
     {
         [SerializeField] private Text label;
         private readonly HashSet<CollectibleKind> required = new HashSet<CollectibleKind>();
@@ -81,7 +81,7 @@ namespace CursedWilds
     }
 
     [RequireComponent(typeof(Collider))]
-    public sealed class CollectibleController : MonoBehaviour
+    public sealed partial class CollectibleController : MonoBehaviour
     {
         [SerializeField] private CollectibleKind kind;
         [SerializeField] private float bobHeight = .35f;
@@ -117,7 +117,7 @@ namespace CursedWilds
     }
 
     [RequireComponent(typeof(Collider))]
-    public sealed class HazardVolume : MonoBehaviour
+    public sealed partial class HazardVolume : MonoBehaviour
     {
         [SerializeField] private float damagePerSecond = 12f;
         [SerializeField] private bool slow;
@@ -136,7 +136,7 @@ namespace CursedWilds
         }
     }
 
-    public sealed class GameFlowManager : MonoBehaviour
+    public sealed partial class GameFlowManager : MonoBehaviour
     {
         public static GameFlowManager Instance { get; private set; }
         [SerializeField] private GameObject gameOverPanel;
@@ -166,7 +166,7 @@ namespace CursedWilds
         public void MainMenu() { Time.timeScale = 1f; SceneManager.LoadScene("MainMenu"); }
     }
 
-    public sealed class PauseMenu : MonoBehaviour
+    public sealed partial class PauseMenu : MonoBehaviour
     {
         [SerializeField] private GameObject panel;
         private bool paused;
@@ -189,13 +189,13 @@ namespace CursedWilds
         public void MainMenu() { Time.timeScale = 1f; GameFlowManager.Instance?.MainMenu(); }
     }
 
-    public sealed class MenuController : MonoBehaviour
+    public sealed partial class MenuController : MonoBehaviour
     {
         public void Play() => SceneManager.LoadScene("CursedWilds");
         public void Quit() { Application.Quit(); }
     }
 
-    public sealed class AudioManager : MonoBehaviour
+    public sealed partial class AudioManager : MonoBehaviour
     {
         [SerializeField] private AudioMixer mixer;
         [SerializeField] private AudioSource music;

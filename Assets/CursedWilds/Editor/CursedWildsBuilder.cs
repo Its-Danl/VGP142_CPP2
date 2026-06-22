@@ -26,11 +26,12 @@ namespace CursedWilds.Editor
             EditorSettings.serializationMode = SerializationMode.ForceText;
             EnsureFolders(); CleanLegacyPrefabs(); CreateMaterials();
             AnimatorController enemyAnimator = CreateEnemyAnimatorController();
+            AnimatorController playerAnimator = CreatePlayerCombatAnimator();
             GameObject projectile = CreateProjectilePrefab();
             GameObject melee = CreateEnemyPrefab("MeleeEnemy", enemyA, 70f, typeof(MeleeEnemy), projectile, enemyAnimator);
             GameObject turret = CreateEnemyPrefab("TurretEnemy", enemyB, 85f, typeof(TurretEnemy), projectile, enemyAnimator);
             GameObject charger = CreateEnemyPrefab("ChargerEnemy", enemyC, 110f, typeof(ChargerEnemy), projectile, enemyAnimator);
-            BuildMainMenu(); BuildGameplay(melee, turret, charger); SetBuildScenes();
+            BuildMainMenu(); BuildGameplay(melee, turret, charger, playerAnimator); SetBuildScenes();
             AssetDatabase.SaveAssets(); AssetDatabase.Refresh();
             Debug.Log("Cursed Wilds scenes and prefabs built successfully.");
         }
@@ -125,13 +126,38 @@ namespace CursedWilds.Editor
             AssetDatabase.SaveAssets();
             return controller;
         }
+        private static AnimatorController CreatePlayerCombatAnimator()
+        {
+            const string sourcePath = "Assets/Starter Assets/Runtime/ThirdPersonController/Character/Animations/StarterAssetsThirdPerson.controller";
+            const string modelPath = "Assets/Universal Animation Library 2[Standard]/Unity/UAL2_Standard.fbx";
+            string path = Root + "/Generated/PlayerCombat.controller";
+            if (AssetDatabase.LoadAssetAtPath<Object>(path) != null) AssetDatabase.DeleteAsset(path);
+            if (!AssetDatabase.CopyAsset(sourcePath, path)) throw new System.InvalidOperationException("Could not create the player combat Animator controller.");
+            var controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(path);
+            if (!controller.parameters.Any(parameter => parameter.name == "Attack")) controller.AddParameter("Attack", AnimatorControllerParameterType.Trigger);
+            AnimationClip attackClip = AssetDatabase.LoadAllAssetsAtPath(modelPath).OfType<AnimationClip>().First(clip => clip.name.EndsWith("Melee_Hook"));
+            var layerMachine = new AnimatorStateMachine { name = "Combat Layer" };
+            AssetDatabase.AddObjectToAsset(layerMachine, controller);
+            var layer = new AnimatorControllerLayer { name = "Combat", defaultWeight = 1f, blendingMode = AnimatorLayerBlendingMode.Override, stateMachine = layerMachine };
+            controller.AddLayer(layer);
+            var empty = layerMachine.AddState("Empty"); layerMachine.defaultState = empty;
+            var attack = layerMachine.AddState("Punch"); attack.motion = attackClip;
+            var enter = layerMachine.AddAnyStateTransition(attack); enter.AddCondition(AnimatorConditionMode.If, 0f, "Attack"); enter.hasExitTime = false; enter.duration = .05f;
+            var exit = attack.AddTransition(empty); exit.hasExitTime = true; exit.exitTime = .92f; exit.duration = .08f;
+            EditorUtility.SetDirty(controller); AssetDatabase.SaveAssets(); return controller;
+        }
         private static GameObject CreateEnemyPrefab(string name, Material material, float healthValue, System.Type controllerType, GameObject projectile, AnimatorController enemyAnimator)
         {
             const string modelPath = "Assets/Universal Animation Library 2[Standard]/Unity/UAL2_Standard.fbx";
             var source = AssetDatabase.LoadAssetAtPath<GameObject>(modelPath);
             if (source == null) throw new System.InvalidOperationException("Required UAL enemy model is missing.");
             var root = new GameObject(name);
-            var model = (GameObject)PrefabUtility.InstantiatePrefab(source); model.name = "Model"; model.transform.SetParent(root.transform, false); model.transform.localScale = Vector3.one;
+            // The animation-library FBX carries editor-only helper behaviours.  Fully unpack the
+            // instance before saving our gameplay prefab so those unresolved source components
+            // cannot be serialized into any enemy variant.
+            var model = (GameObject)PrefabUtility.InstantiatePrefab(source);
+            PrefabUtility.UnpackPrefabInstance(model, PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);
+            model.name = "Model"; model.transform.SetParent(root.transform, false); model.transform.localScale = Vector3.one;
             var animator = model.GetComponent<Animator>(); if (animator == null) animator = model.AddComponent<Animator>(); animator.runtimeAnimatorController = enemyAnimator; animator.applyRootMotion = false;
             foreach (var renderer in model.GetComponentsInChildren<Renderer>()) renderer.sharedMaterial = material;
             var collider = root.AddComponent<CapsuleCollider>(); collider.height = 1.8f; collider.radius = .35f; collider.center = new Vector3(0f, .9f, 0f);
@@ -167,19 +193,25 @@ namespace CursedWilds.Editor
             AddButton(panel.transform, "Play", new Vector2(0f, 15f), menu.Play); AddButton(panel.transform, "Quit", new Vector2(0f, -65f), menu.Quit);
             SaveScene("MainMenu");
         }
-        private static void BuildGameplay(GameObject melee, GameObject turret, GameObject charger)
+        private static void BuildGameplay(GameObject melee, GameObject turret, GameObject charger, AnimatorController playerAnimator)
         {
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single); RenderSettings.ambientLight = new Color(.26f, .18f, .32f); RenderSettings.fog = true; RenderSettings.fogColor = new Color(.12f, .07f, .18f); RenderSettings.fogDensity = .008f;
             var light = new GameObject("Moonlight").AddComponent<Light>(); light.type = LightType.Directional; light.intensity = 1.2f; light.color = new Color(.55f, .45f, 1f); light.transform.rotation = Quaternion.Euler(50f, -25f, 0f);
-            var terrain = CreateTerrain(); var player = CreatePlayer(OnTerrain(250f, 55f)); new GameObject("SaveSystem").AddComponent<SaveSystem>(); var game = new GameObject("GameFlow").AddComponent<GameFlowManager>(); Set(game, "playerHealth", player.GetComponent<Health>());
+            var terrain = CreateTerrain(); var player = CreatePlayer(OnTerrain(250f, 55f), playerAnimator); new GameObject("SaveSystem").AddComponent<SaveSystem>(); var game = new GameObject("GameFlow").AddComponent<GameFlowManager>(); Set(game, "playerHealth", player.GetComponent<Health>());
             var audioObject = new GameObject("AudioManager"); audioObject.AddComponent<AudioSource>(); var audio = audioObject.AddComponent<AudioManager>();
             var canvas = CreateCanvas("Gameplay UI"); CreateHud(canvas.transform, player.GetComponent<Health>(), game, audio, out Text objectiveText, out GameObject over, out GameObject win); Set(game, "gameOverPanel", over); Set(game, "victoryPanel", win); CreatePauseMenu(canvas.transform, game, audio);
             var objective = new GameObject("ObjectiveTracker").AddComponent<ObjectiveTracker>(); Set(objective, "label", objectiveText);
             CreateCollectible("Healing Bloom", OnTerrain(260f, 78f), CollectibleKind.Heal, toxic, objective); CreateCollectible("Swift Charm", OnTerrain(345f, 140f), CollectibleKind.Speed, relic, objective); CreateCollectible("Shield Charm", OnTerrain(180f, 360f), CollectibleKind.Shield, enemyB, objective); CreateCollectible("Heartwood Relic", OnTerrain(375f, 365f), CollectibleKind.HeartwoodRelic, relic, objective);
             CreatePathsAndRuins(); CreateHazards(); CreateEnvironmentalDetail(); var director = new GameObject("Enemy Spawn Director").AddComponent<EnemySpawnDirector>(); ConfigureSpawns(director, melee, turret, charger);
             var surface = terrain.gameObject.AddComponent<NavMeshSurface>(); surface.BuildNavMesh();
+            SetInactive("Paused"); SetInactive("Game Over"); SetInactive("Victory");
             RemoveMissingScripts(SceneManager.GetActiveScene());
             SaveScene("CursedWilds");
+        }
+        private static void SetInactive(string name)
+        {
+            foreach (var transform in Object.FindObjectsByType<Transform>())
+                if (transform.name == name) transform.gameObject.SetActive(false);
         }
         private static Terrain CreateTerrain()
         {
@@ -225,7 +257,8 @@ namespace CursedWilds.Editor
             Material pathMaterial = MaterialAsset("Path Stone", new Color(.22f, .18f, .14f)); Material ruinMaterial = MaterialAsset("Ruin Stone", new Color(.32f, .3f, .35f));
             for (int i = 0; i < 22; i++)
             {
-                float z = 28f + i * 20f; var segment = GameObject.CreatePrimitive(PrimitiveType.Cube); segment.name = "Worn Path"; segment.transform.position = OnTerrain(250f + Mathf.Sin(i * .75f) * 8f, z, .08f); segment.transform.localScale = new Vector3(11f, .15f, 18f); segment.GetComponent<Renderer>().sharedMaterial = pathMaterial;
+                // Keep the first tile beyond the third-person camera's starting sightline.
+                float z = 92f + i * 15f; var segment = GameObject.CreatePrimitive(PrimitiveType.Cube); segment.name = "Worn Path"; segment.transform.position = OnTerrain(250f + Mathf.Sin(i * .75f) * 8f, z, .08f); segment.transform.localScale = new Vector3(11f, .15f, 13f); segment.GetComponent<Renderer>().sharedMaterial = pathMaterial;
             }
             for (int ruin = 0; ruin < 3; ruin++)
             {
@@ -236,12 +269,13 @@ namespace CursedWilds.Editor
                 }
             }
         }
-        private static GameObject CreatePlayer(Vector3 position)
+        private static GameObject CreatePlayer(Vector3 position, AnimatorController playerAnimator)
         {
             var source = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/PlayerPrefab.prefab");
             if (source == null) throw new System.InvalidOperationException("Required player prefab is missing: Assets/Prefabs/PlayerPrefab.prefab");
             var player = (GameObject)PrefabUtility.InstantiatePrefab(source); player.name = "Player"; player.tag = "Player"; player.transform.position = position;
             // Starter Assets owns movement, gravity, jumping, and Mecanim animation. Cursed Wilds only layers gameplay on it.
+            player.GetComponent<Animator>().runtimeAnimatorController = playerAnimator;
             player.AddComponent<Health>(); player.AddComponent<PlayerMovementEffects>(); player.AddComponent<PlayerStatus>(); player.AddComponent<PlayerCombat>();
             foreach (var listener in player.GetComponentsInChildren<AudioListener>(true)) Object.DestroyImmediate(listener);
             var cameraGo = new GameObject("Third Person Camera"); cameraGo.tag = "MainCamera"; var camera = cameraGo.AddComponent<Camera>(); cameraGo.AddComponent<AudioListener>(); var follow = cameraGo.AddComponent<ThirdPersonCamera>(); follow.Configure(player.transform); cameraGo.transform.position = position + new Vector3(0f, 3f, -6f); cameraGo.transform.LookAt(player.transform.position + Vector3.up);
@@ -249,12 +283,54 @@ namespace CursedWilds.Editor
         }
         private static void CreateCollectible(string name, Vector3 position, CollectibleKind kind, Material material, ObjectiveTracker tracker)
         {
-            var go = GameObject.CreatePrimitive(PrimitiveType.Cylinder); go.name = name; go.transform.position = position; go.transform.localScale = kind == CollectibleKind.HeartwoodRelic ? new Vector3(1.4f, 2.5f, 1.4f) : new Vector3(.8f, 1.2f, .8f); go.GetComponent<Renderer>().sharedMaterial = material; var col = go.GetComponent<Collider>(); col.isTrigger = true; var collect = go.AddComponent<CollectibleController>(); Set(collect, "kind", kind); Set(collect, "objectives", tracker);
+            var go = new GameObject(name); go.transform.position = position; var collider = go.AddComponent<SphereCollider>(); collider.radius = kind == CollectibleKind.HeartwoodRelic ? 1.5f : 1f; collider.isTrigger = true;
+            if (kind == CollectibleKind.Heal)
+            {
+                CreateOrb(go.transform, "Bloom Core", Vector3.up * .8f, Vector3.one * .52f, material);
+                for (int i = 0; i < 6; i++) { float angle = i * 60f * Mathf.Deg2Rad; CreateOrb(go.transform, "Bloom Petal", new Vector3(Mathf.Cos(angle) * .55f, .75f, Mathf.Sin(angle) * .55f), new Vector3(.42f,.18f,.42f), relic); }
+            }
+            else if (kind == CollectibleKind.Speed)
+            {
+                var crystal = GameObject.CreatePrimitive(PrimitiveType.Cylinder); crystal.name = "Wind Crystal"; crystal.transform.SetParent(go.transform, false); crystal.transform.localPosition = Vector3.up * .9f; crystal.transform.localScale = new Vector3(.45f, 1.35f, .45f); crystal.transform.rotation = Quaternion.Euler(0f, 0f, 45f); crystal.GetComponent<Renderer>().sharedMaterial = material;
+            }
+            else if (kind == CollectibleKind.Shield)
+            {
+                CreateOrb(go.transform, "Shield Heart", Vector3.up * .85f, Vector3.one * .45f, material);
+                for (int i = 0; i < 3; i++) { var ring = GameObject.CreatePrimitive(PrimitiveType.Cylinder); ring.name = "Shield Ring"; ring.transform.SetParent(go.transform, false); ring.transform.localPosition = Vector3.up * .85f; ring.transform.localScale = new Vector3(1.15f, .05f, 1.15f); ring.transform.rotation = Quaternion.Euler(i * 55f, i * 40f, 0f); ring.GetComponent<Renderer>().sharedMaterial = relic; }
+            }
+            else
+            {
+                var trunk = GameObject.CreatePrimitive(PrimitiveType.Cylinder); trunk.name = "Heartwood Trunk"; trunk.transform.SetParent(go.transform, false); trunk.transform.localPosition = Vector3.up * 1.1f; trunk.transform.localScale = new Vector3(.72f, 1.8f, .72f); trunk.GetComponent<Renderer>().sharedMaterial = MaterialAsset("Heartwood Bark", new Color(.32f,.12f,.05f));
+                CreateOrb(go.transform, "Heartwood Crown", Vector3.up * 2.35f, Vector3.one * 1.05f, material);
+            }
+            var collect = go.AddComponent<CollectibleController>(); Set(collect, "kind", kind); Set(collect, "objectives", tracker);
+        }
+        private static void CreateOrb(Transform parent, string name, Vector3 position, Vector3 scale, Material material)
+        {
+            var orb = GameObject.CreatePrimitive(PrimitiveType.Sphere); orb.name = name; orb.transform.SetParent(parent, false); orb.transform.localPosition = position; orb.transform.localScale = scale; orb.GetComponent<Renderer>().sharedMaterial = material; Object.DestroyImmediate(orb.GetComponent<Collider>());
         }
         private static void CreateHazards()
         {
             Vector3[] positions = { new(100, 34, 100), new(130,34,225), new(210,34,115), new(290,34,230), new(390,34,260), new(75,34,350), new(230,34,315), new(315,34,395), new(420,34,410), new(110,34,430), new(445,34,120), new(50,34,250) };
-            for (int i = 0; i < positions.Length; i++) { Material mat = i % 3 == 0 ? toxic : i % 3 == 1 ? fire : bramble; var type = i % 3 == 0 ? "Toxic Bog" : i % 3 == 1 ? "Fire Pit" : "Cursed Brambles"; var go = GameObject.CreatePrimitive(PrimitiveType.Cylinder); go.name = type + " " + (i + 1); go.transform.position = OnTerrain(positions[i].x, positions[i].z, .1f); go.transform.localScale = new Vector3(8f, .3f, 8f); go.GetComponent<Renderer>().sharedMaterial = mat; var hazard = go.AddComponent<HazardVolume>(); Set(hazard, "slow", i % 3 == 0); Set(hazard, "damagePerSecond", i % 3 == 1 ? 22f : 12f); }
+            for (int i = 0; i < positions.Length; i++)
+            {
+                Material mat = i % 3 == 0 ? toxic : i % 3 == 1 ? fire : bramble; var type = i % 3 == 0 ? "Toxic Bog" : i % 3 == 1 ? "Fire Pit" : "Cursed Brambles";
+                var go = new GameObject(type + " " + (i + 1)); go.transform.position = OnTerrain(positions[i].x, positions[i].z, .1f); var trigger = go.AddComponent<SphereCollider>(); trigger.radius = 4f; trigger.isTrigger = true;
+                var baseDisk = GameObject.CreatePrimitive(PrimitiveType.Cylinder); baseDisk.name = "Hazard Ground"; baseDisk.transform.SetParent(go.transform, false); baseDisk.transform.localScale = new Vector3(8f, .22f, 8f); baseDisk.GetComponent<Renderer>().sharedMaterial = mat; Object.DestroyImmediate(baseDisk.GetComponent<Collider>());
+                if (i % 3 == 0) CreateHazardParticles(go.transform, new Color(.18f,.95f,.3f), 18, 1.3f, 1.2f);
+                if (i % 3 == 1)
+                {
+                    CreateHazardParticles(go.transform, new Color(1f,.25f,.03f), 36, 2.2f, 2.5f);
+                    for (int stone = 0; stone < 7; stone++) { float angle = stone * Mathf.PI * 2f / 7f; var rock = GameObject.CreatePrimitive(PrimitiveType.Cube); rock.name = "Fire Pit Stone"; rock.transform.SetParent(go.transform, false); rock.transform.localPosition = new Vector3(Mathf.Cos(angle) * 3.2f, .25f, Mathf.Sin(angle) * 3.2f); rock.transform.localScale = new Vector3(.8f,.45f,.8f); rock.GetComponent<Renderer>().sharedMaterial = MaterialAsset("Charcoal", new Color(.08f,.06f,.05f)); Object.DestroyImmediate(rock.GetComponent<Collider>()); }
+                }
+                if (i % 3 == 2)
+                    for (int thorn = 0; thorn < 11; thorn++) { float angle = thorn * 2.4f; var spike = GameObject.CreatePrimitive(PrimitiveType.Cylinder); spike.name = "Bramble Thorn"; spike.transform.SetParent(go.transform, false); spike.transform.localPosition = new Vector3(Mathf.Cos(angle) * (1.3f + thorn % 3), .45f, Mathf.Sin(angle) * (1.3f + thorn % 3)); spike.transform.localScale = new Vector3(.16f,.85f,.16f); spike.transform.rotation = Quaternion.Euler(60f, thorn * 37f, 0f); spike.GetComponent<Renderer>().sharedMaterial = bramble; Object.DestroyImmediate(spike.GetComponent<Collider>()); }
+                var hazard = go.AddComponent<HazardVolume>(); Set(hazard, "slow", i % 3 == 0); Set(hazard, "damagePerSecond", i % 3 == 1 ? 22f : 12f);
+            }
+        }
+        private static void CreateHazardParticles(Transform parent, Color color, int count, float lifetime, float height)
+        {
+            var particles = new GameObject("Hazard VFX").AddComponent<ParticleSystem>(); particles.transform.SetParent(parent, false); var main = particles.main; main.startColor = color; main.startLifetime = lifetime; main.startSpeed = height; main.startSize = .25f; main.maxParticles = count; var emission = particles.emission; emission.rateOverTime = count / lifetime; var shape = particles.shape; shape.shapeType = ParticleSystemShapeType.Circle; shape.radius = 2.8f;
         }
         private static void CreateEnvironmentalDetail()
         {

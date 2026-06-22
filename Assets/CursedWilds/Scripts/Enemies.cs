@@ -5,7 +5,7 @@ using Unity.AI.Navigation;
 namespace CursedWilds
 {
     [RequireComponent(typeof(Health))]
-    public abstract class EnemyController : MonoBehaviour
+    public abstract partial class EnemyController : MonoBehaviour
     {
         [SerializeField] protected float detectionRadius = 65f;
         [SerializeField] protected float attackRadius = 2f;
@@ -35,7 +35,7 @@ namespace CursedWilds
         private void OnDied(Health _, GameObject __) { if (agent != null && agent.enabled) agent.isStopped = true; if (animator != null) animator.SetBool("Dead", true); VfxFactory.SpawnEnemyDeath(transform.position + Vector3.up); AudioManager.PlaySfx(.45f, 90f); Destroy(gameObject, 1.4f); }
     }
 
-    public sealed class MeleeEnemy : EnemyController
+    public sealed partial class MeleeEnemy : EnemyController
     {
         protected override void Update()
         {
@@ -47,7 +47,7 @@ namespace CursedWilds
         }
     }
 
-    public sealed class TurretEnemy : EnemyController
+    public sealed partial class TurretEnemy : EnemyController
     {
         [SerializeField] private GameObject projectilePrefab;
         public void Configure(GameObject projectile) => projectilePrefab = projectile;
@@ -61,7 +61,7 @@ namespace CursedWilds
         }
     }
 
-    public sealed class ChargerEnemy : EnemyController
+    public sealed partial class ChargerEnemy : EnemyController
     {
         [SerializeField] private float chargeSpeed = 15f;
         [SerializeField] private float windup = .65f;
@@ -86,7 +86,7 @@ namespace CursedWilds
         }
     }
 
-    public sealed class EnemyProjectile : MonoBehaviour
+    public sealed partial class EnemyProjectile : MonoBehaviour
     {
         private Transform target; private float speed = 18f; private float damage = 14f;
         public void Launch(Transform player) { target = player; Destroy(gameObject, 4f); }
@@ -98,7 +98,7 @@ namespace CursedWilds
         }
     }
 
-    public sealed class WorldHealthBar : MonoBehaviour
+    public sealed partial class WorldHealthBar : MonoBehaviour
     {
         [SerializeField] private Transform fill;
         [SerializeField] private Health target;
@@ -109,7 +109,7 @@ namespace CursedWilds
         private void LateUpdate() { if (Camera.main != null) transform.forward = Camera.main.transform.forward; }
     }
 
-    public sealed class EnemySpawnDirector : MonoBehaviour
+    public sealed partial class EnemySpawnDirector : MonoBehaviour
     {
         [SerializeField] private GameObject meleePrefab;
         [SerializeField] private GameObject turretPrefab;

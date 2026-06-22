@@ -1,0 +1,16 @@
+{
+  "name": "NatureStarterKit.LegacyImageEffects",
+  "rootNamespace": "",
+  "references": [],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": false,
+  "defineConstraints": [
+    "ENABLE_LEGACY_IMAGE_EFFECTS"
+  ],
+  "versionDefines": [],
+  "noEngineReferences": false
+}
