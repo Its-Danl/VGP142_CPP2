@@ -88,13 +88,21 @@ namespace CursedWilds
 
     public sealed partial class EnemyProjectile : MonoBehaviour
     {
-        private Transform target; private float speed = 18f; private float damage = 14f;
-        public void Launch(Transform player) { target = player; Destroy(gameObject, 4f); }
+        private Vector3 direction; private float speed = 18f; private float damage = 14f;
+        public void Launch(Transform player)
+        {
+            direction = ((player.position + Vector3.up) - transform.position).normalized;
+            transform.forward = direction;
+            Destroy(gameObject, 4f);
+        }
         private void Update()
         {
-            if (target == null) { Destroy(gameObject); return; }
-            Vector3 direction = (target.position + Vector3.up - transform.position).normalized; transform.position += direction * speed * Time.deltaTime; transform.forward = direction;
-            if (Vector3.Distance(transform.position, target.position + Vector3.up) < .8f) { target.GetComponent<PlayerStatus>()?.ReceiveDamage(damage, gameObject); VfxFactory.Spawn(transform.position, Color.red, 15); Destroy(gameObject); }
+            transform.position += direction * speed * Time.deltaTime;
+        }
+        private void OnTriggerEnter(Collider other)
+        {
+            PlayerStatus status = other.GetComponentInParent<PlayerStatus>();
+            if (status != null) { status.ReceiveDamage(damage, gameObject); VfxFactory.Spawn(transform.position, Color.red, 15); Destroy(gameObject); }
         }
     }
 
